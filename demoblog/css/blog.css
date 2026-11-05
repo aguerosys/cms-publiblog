@@ -1,0 +1,34 @@
+/* Demoblog: web estática de prueba para Publiblog. Estos recursos viven en la web del cliente;
+   el CMS nunca los sube (solo escribe dentro de /blog/). */
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; font: 18px/1.7 Georgia, "Times New Roman", serif; color: #222; background: #fff; }
+.container { max-width: 760px; margin: 0 auto; padding: 0 20px; }
+.site-header { border-bottom: 1px solid #e5e5e5; }
+.site-header .container { display: flex; justify-content: space-between; align-items: center; height: 64px; }
+.site-header .logo { font: 700 20px system-ui, sans-serif; color: #111; text-decoration: none; }
+.site-header nav a { margin-left: 20px; font: 15px system-ui, sans-serif; color: #444; text-decoration: none; }
+.site-footer { margin-top: 64px; padding: 24px 0; border-top: 1px solid #e5e5e5; font: 14px system-ui, sans-serif; color: #777; }
+.post { padding-top: 40px; }
+.post h1 { font: 700 38px/1.2 system-ui, sans-serif; margin: 0 0 8px; }
+.post-meta { font: 14px system-ui, sans-serif; color: #777; margin: 0 0 24px; }
+.post-cover { display: block; width: 100%; height: auto; border-radius: 6px; margin-bottom: 28px; }
+.post-body h2 { font: 700 26px/1.3 system-ui, sans-serif; margin: 40px 0 12px; }
+.post-body h3 { font: 700 21px/1.3 system-ui, sans-serif; margin: 32px 0 10px; }
+.post-body img { max-width: 100%; height: auto; }
+.post-body a { color: #0b5fd6; }
+.post-body blockquote { margin: 24px 0; padding: 4px 20px; border-left: 4px solid #ddd; color: #555; }
+.post-body table { border-collapse: collapse; width: 100%; margin: 24px 0; font: 15px system-ui, sans-serif; }
+.post-body th, .post-body td { border: 1px solid #ddd; padding: 8px 10px; text-align: left; }
+.post-body th { background: #f5f5f5; }
+.post-list { list-style: none; padding: 0; }
+.post-list li { padding: 20px 0; border-bottom: 1px solid #eee; }
+.post-list h2 { margin: 0 0 4px; font: 700 22px system-ui, sans-serif; }
+.post-list a { color: #111; text-decoration: none; }
+.list-title { font: 700 34px system-ui, sans-serif; margin: 40px 0 8px; }
+.list-item { padding: 24px 0; border-bottom: 1px solid #eee; }
+.list-item img { display: block; width: 100%; height: auto; border-radius: 6px; margin-bottom: 12px; }
+.list-item h2 { margin: 0 0 4px; font: 700 22px system-ui, sans-serif; }
+.list-item h2 a { color: #111; text-decoration: none; }
+.list-item p { margin: 6px 0; }
+.pager { display: flex; justify-content: space-between; align-items: center; margin: 32px 0; font: 15px system-ui, sans-serif; }
+.pager a { color: #0b5fd6; text-decoration: none; }

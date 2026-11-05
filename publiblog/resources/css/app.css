@@ -1,0 +1,41 @@
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+
+@theme {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Contenido del editor y de la vista previa (no replica el diseño final del cliente). */
+.pb-prose { line-height: 1.7; color: #1f2937; }
+.pb-prose > * + * { margin-top: 0.9em; }
+.pb-prose h2 { font-size: 1.5rem; font-weight: 700; line-height: 1.3; margin-top: 1.6em; }
+.pb-prose h3 { font-size: 1.25rem; font-weight: 700; margin-top: 1.4em; }
+.pb-prose h4 { font-size: 1.1rem; font-weight: 700; margin-top: 1.2em; }
+.pb-prose ul { list-style: disc; padding-left: 1.5rem; }
+.pb-prose ol { list-style: decimal; padding-left: 1.5rem; }
+.pb-prose a { color: #2563eb; text-decoration: underline; }
+.pb-prose blockquote { border-left: 4px solid #d1d5db; padding-left: 1rem; color: #4b5563; }
+.pb-prose img { max-width: 100%; height: auto; border-radius: 0.375rem; }
+.pb-prose hr { border-color: #e5e7eb; }
+.pb-prose table { border-collapse: collapse; width: 100%; }
+.pb-prose th, .pb-prose td { border: 1px solid #d1d5db; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+.pb-prose th { background: #f3f4f6; font-weight: 600; }
+
+.pb-editor .ProseMirror { min-height: 22rem; padding: 1rem; outline: none; }
+.pb-editor .ProseMirror p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    color: #9ca3af;
+    float: left;
+    height: 0;
+    pointer-events: none;
+}
+.pb-editor .ProseMirror img.ProseMirror-selectednode { outline: 2px solid #2563eb; }
+.pb-editor .ProseMirror .selectedCell { background: #dbeafe; }
+.pb-editor .ProseMirror table { margin: 1rem 0; }
+
+.pb-tool { padding: 0.25rem 0.55rem; border-radius: 0.375rem; font-size: 0.85rem; color: #374151; }
+.pb-tool:hover { background: #e5e7eb; }
+.pb-tool.is-active { background: #1f2937; color: #fff; }
+.pb-tool:disabled { opacity: 0.4; cursor: not-allowed; }

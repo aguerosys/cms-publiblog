@@ -1,0 +1,6 @@
+{
+  "name": "publiblog-sftp-test-server",
+  "private": true,
+  "description": "Servidor SFTP local para probar la publicación real de Publiblog (solo desarrollo)",
+  "dependencies": { "ssh2": "^1.16.0" }
+}

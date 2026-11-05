@@ -1,0 +1,4 @@
+node_modules/
+host_key*
+client_key*
+sftp-ops.log
