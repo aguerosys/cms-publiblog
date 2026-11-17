@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Services\TwoFactorService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -36,6 +37,21 @@ class LoginController extends Controller
             throw ValidationException::withMessages([
                 'email' => "Demasiados intentos. Vuelve a probar en {$seconds} segundos.",
             ]);
+        }
+
+        if (TwoFactorService::enabled()) {
+            // Con 2FA la contraseña sola no abre sesión: se comprueba y se pide el código del correo.
+            $user = Auth::getProvider()->retrieveByCredentials(['email' => $credentials['email']]);
+
+            if (! $user || ! Auth::getProvider()->validateCredentials($user, $credentials)) {
+                RateLimiter::hit($key, 60);
+
+                throw ValidationException::withMessages(['email' => 'Las credenciales no son correctas.']);
+            }
+
+            RateLimiter::clear($key);
+
+            return app(TwoFactorController::class)->begin($request, $user, $request->boolean('remember'));
         }
 
         if (! Auth::attempt($credentials, $request->boolean('remember'))) {

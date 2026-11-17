@@ -3,11 +3,22 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\BlogRequest;
+use App\Jobs\RegenerateBlog;
+use App\Jobs\VerifyBlog;
+use App\Models\Article;
 use App\Models\Blog;
+use App\Models\Deployment;
+use App\Services\ActivityLogger;
+use App\Services\BlogRegenerator;
+use App\Services\BlogVerifier;
 use App\Services\Remote\ConnectionTester;
+use App\Services\SitePartials;
+use App\Services\SsiManager;
+use App\Services\TemplateFingerprint;
 use DateTimeZone;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 
 class BlogController extends Controller
@@ -15,7 +26,16 @@ class BlogController extends Controller
     public function index(): View
     {
         return view('admin.blogs.index', [
-            'blogs' => Blog::withCount('articles')->orderBy('name')->get(),
+            'blogs' => Blog::withCount([
+                'articles',
+                'articles as error_articles_count' => fn ($q) => $q->where('status', Article::STATUS_ERROR),
+            ])->withMax('deployments as last_activity_at', 'finished_at')->orderBy('name')->get(),
+            // Errores de publicación pendientes de reintentar, de todos los blogs visibles para el usuario.
+            'failed' => Article::with(['blog', 'lastDeployment'])
+                ->where('status', Article::STATUS_ERROR)
+                ->latest('updated_at')
+                ->limit(10)
+                ->get(),
         ]);
     }
 
@@ -36,6 +56,7 @@ class BlogController extends Controller
     public function store(BlogRequest $request): RedirectResponse
     {
         $blog = Blog::create($this->attributes($request) + ['status' => Blog::STATUS_PENDING]);
+        ActivityLogger::record('blog.created', $blog, details: ['domain' => $blog->domain, 'template' => $blog->template]);
 
         return redirect()->route('blogs.show', $blog)
             ->with('status', 'Blog creado. Prueba la conexión para guardar la huella del servidor.');
@@ -43,10 +64,18 @@ class BlogController extends Controller
 
     public function show(Blog $blog): View
     {
+        Gate::authorize('view', $blog);
+
         return view('admin.blogs.show', [
             'blog' => $blog,
             'articleCount' => $blog->articles()->count(),
             'pendingFingerprint' => session('pending_fingerprint'),
+            'regeneration' => Deployment::where('blog_id', $blog->id)->where('action', 'regenerate')->whereNull('article_id')->latest('id')->first(),
+            'templateChanged' => TemplateFingerprint::changed($blog),
+            'ssiSupported' => SitePartials::templateSupports((string) $blog->template),
+            'verification' => Deployment::where('blog_id', $blog->id)->where('action', 'verify')->latest('id')->first(),
+            'differences' => Article::where('blog_id', $blog->id)->whereIn('remote_state', BlogVerifier::PROBLEMS)->orderBy('public_id')->limit(50)->get(),
+            'differencesTotal' => Article::where('blog_id', $blog->id)->whereIn('remote_state', BlogVerifier::PROBLEMS)->count(),
         ]);
     }
 
@@ -81,7 +110,14 @@ class BlogController extends Controller
             $data['status'] = Blog::STATUS_PENDING;
         }
 
-        $blog->update($data);
+        $blog->fill($data);
+        // Solo los nombres de los campos: nunca el valor de una credencial.
+        $changed = array_keys($blog->getDirty());
+        $blog->save();
+
+        if ($changed) {
+            ActivityLogger::record('blog.updated', $blog, details: ['fields' => $changed]);
+        }
 
         return redirect()->route('blogs.show', $blog)->with('status', 'Blog actualizado.');
     }
@@ -89,6 +125,7 @@ class BlogController extends Controller
     public function testConnection(Blog $blog, ConnectionTester $tester): RedirectResponse
     {
         $result = $tester->test($blog);
+        ActivityLogger::record('blog.connection_tested', $blog, details: ['ok' => (bool) $result['ok'], 'code' => $result['code'] ?? null]);
 
         if ($result['fingerprint'] && ($result['code'] === 'hostkey' || ! $blog->host_key_fingerprint)) {
             if ($result['code'] === 'hostkey') {
@@ -116,6 +153,57 @@ class BlogController extends Controller
         return redirect()->route('blogs.show', $blog)->with('error', $result['message']);
     }
 
+    /** Regenera todos los artículos publicados con la plantilla actual (trabajo en cola, con progreso). */
+    public function regenerate(Request $request, Blog $blog, BlogRegenerator $regenerator): RedirectResponse
+    {
+        if ($regenerator->isRunning($blog)) {
+            return redirect()->route('blogs.show', $blog)->with('error', 'Ya hay una regeneración en curso.');
+        }
+
+        if (! $blog->canPublish()) {
+            return redirect()->route('blogs.show', $blog)->with('error', 'Antes hay que dejar la conexión del blog en estado correcto.');
+        }
+
+        $deployment = $regenerator->start($blog, $request->user(), force: $request->boolean('force'), onlyProblems: $request->boolean('only_problems'));
+        ActivityLogger::record('blog.regenerate_started', $blog, details: ['articles' => $deployment->total_items, 'force' => (bool) $deployment->force]);
+        RegenerateBlog::dispatch($deployment->id);
+
+        return redirect()->route('blogs.show', $blog)->with('status', $deployment->total_items === 0
+            ? 'No hay artículos publicados que regenerar.'
+            : 'Regeneración en cola. Verás el progreso aquí.');
+    }
+
+    /** Comparte la cabecera y el pie en un único archivo del servidor (SSI), tras comprobar que el servidor lo permite. */
+    public function enableSsi(Request $request, Blog $blog, SsiManager $ssi): RedirectResponse
+    {
+        $result = $ssi->enable($blog, $request->user());
+
+        return redirect()->route('blogs.show', $blog)->with($result['ok'] ? 'status' : 'error', $result['message']);
+    }
+
+    public function disableSsi(Request $request, Blog $blog, SsiManager $ssi): RedirectResponse
+    {
+        $result = $ssi->disable($blog, $request->user());
+
+        return redirect()->route('blogs.show', $blog)->with($result['ok'] ? 'status' : 'error', $result['message']);
+    }
+
+    /** Lee el servidor del cliente y marca los artículos que no coinciden con el CMS. */
+    public function verify(Request $request, Blog $blog, BlogVerifier $verifier): RedirectResponse
+    {
+        if ($verifier->isRunning($blog)) {
+            return redirect()->route('blogs.show', $blog)->with('error', 'Ya hay una comprobación en curso.');
+        }
+
+        if (! $blog->canPublish()) {
+            return redirect()->route('blogs.show', $blog)->with('error', 'Antes hay que dejar la conexión del blog en estado correcto.');
+        }
+
+        VerifyBlog::dispatch($verifier->start($blog, $request->user())->id);
+
+        return redirect()->route('blogs.show', $blog)->with('status', 'Comprobación en cola. Verás el resultado aquí.');
+    }
+
     /** Un administrador acepta la huella mostrada; se vuelve a comprobar antes de guardarla. */
     public function confirmFingerprint(Request $request, Blog $blog, ConnectionTester $tester): RedirectResponse
     {
@@ -128,6 +216,7 @@ class BlogController extends Controller
         }
 
         $blog->update(['host_key_fingerprint' => $data['fingerprint'], 'status' => Blog::STATUS_ACTIVE]);
+        ActivityLogger::record('blog.fingerprint_confirmed', $blog, details: ['fingerprint' => $data['fingerprint']]);
 
         return redirect()->route('blogs.show', $blog)->with('status', 'Huella confirmada. El blog está listo para publicar.');
     }

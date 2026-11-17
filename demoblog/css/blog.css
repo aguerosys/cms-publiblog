@@ -32,3 +32,11 @@ body { margin: 0; font: 18px/1.7 Georgia, "Times New Roman", serif; color: #222;
 .list-item p { margin: 6px 0; }
 .pager { display: flex; justify-content: space-between; align-items: center; margin: 32px 0; font: 15px system-ui, sans-serif; }
 .pager a { color: #0b5fd6; text-decoration: none; }
+
+/* Categorías */
+.breadcrumb { font: 14px system-ui, sans-serif; color: #777; margin: 0 0 8px; }
+.breadcrumb a, .post-meta a { color: #0b5fd6; text-decoration: none; }
+.list-intro { font: 16px system-ui, sans-serif; color: #555; margin: 0 0 16px; }
+.cats { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 24px; font: 14px system-ui, sans-serif; }
+.cats a { padding: 4px 12px; border: 1px solid #ccc; border-radius: 999px; color: #333; text-decoration: none; }
+.cats a[aria-current="page"] { background: #0b5fd6; border-color: #0b5fd6; color: #fff; }

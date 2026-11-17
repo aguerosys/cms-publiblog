@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Scopes\BlogAccessScope;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -10,6 +11,11 @@ class Media extends Model
     protected $table = 'media';
 
     protected $guarded = [];
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BlogAccessScope());
+    }
 
     protected function casts(): array
     {

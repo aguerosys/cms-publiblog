@@ -2,24 +2,26 @@
 
 namespace App\Console\Commands;
 
-use App\Models\Article;
+use App\Jobs\RegenerateBlog;
 use App\Models\Blog;
 use App\Models\Deployment;
-use App\Services\ArticlePublisher;
+use App\Services\BlogRegenerator;
 use Illuminate\Console\Command;
 
 /**
- * Regenera con la plantilla actual y vuelve a subir todos los artículos publicados de un blog
- * (p. ej. tras restaurar la web del cliente o cambiar la plantilla). Cada artículo sigue el
- * flujo normal de publicación; el listado y el sitemap solo se suben si cambian.
+ * Regenera con la plantilla actual los artículos publicados de un blog y los vuelve a subir.
+ *
+ *   blog:regenerate 3             restaura: sube todo (imágenes, HTML, reglas, listado y sitemap)
+ *   blog:regenerate 3 --changed   solo lo que el diseño nuevo cambia (tras tocar la plantilla)
+ *   blog:regenerate 3 --queue     lo encola; lo procesa el cron (ver README)
  */
 class BlogRegenerate extends Command
 {
-    protected $signature = 'blog:regenerate {blog : ID del blog} {--only= : Solo este ID público (000123)}';
+    protected $signature = 'blog:regenerate {blog : ID del blog} {--changed : Subir solo los archivos que cambian} {--queue : Encolar en lugar de ejecutar ahora}';
 
-    protected $description = 'Regenera y vuelve a subir todos los artículos publicados de un blog';
+    protected $description = 'Regenera y vuelve a subir los artículos publicados de un blog';
 
-    public function handle(ArticlePublisher $publisher): int
+    public function handle(BlogRegenerator $regenerator): int
     {
         $blog = Blog::find($this->argument('blog'));
 
@@ -29,33 +31,37 @@ class BlogRegenerate extends Command
             return self::FAILURE;
         }
 
-        $articles = Article::with('blog')
-            ->where('blog_id', $blog->id)
-            ->whereNotNull('remote_path')
-            ->when($this->option('only'), fn ($q, $id) => $q->where('public_id', $id))
-            ->orderBy('public_id')
-            ->get();
+        if ($regenerator->isRunning($blog)) {
+            $this->error('Ya hay una regeneración de este blog en curso.');
 
-        $this->info("Regenerando {$articles->count()} artículos de «{$blog->name}»…");
-        $failed = 0;
-
-        foreach ($articles as $article) {
-            $deployment = $publisher->publish($article);
-            $ok = $deployment->status === Deployment::STATUS_OK;
-            $failed += $ok ? 0 : 1;
-
-            $this->line(sprintf('  %s %s  %s', $ok ? '✔' : '✘', $article->public_id, $ok ? "{$deployment->files_count} archivos" : $deployment->error_message));
-
-            // Un fallo de conexión no mejora artículo a artículo: se corta.
-            if (! $ok && in_array($deployment->error_code, ['auth', 'hostkey', 'blocked', 'connect', 'timeout'], true)) {
-                $this->error('Se detiene: el problema es de conexión, no del artículo.');
-
-                return self::FAILURE;
-            }
+            return self::FAILURE;
         }
 
-        $failed ? $this->warn("{$failed} con error. Revisa el historial del artículo y reintenta.") : $this->info('Todo publicado.');
+        $deployment = $regenerator->start($blog, null, force: ! $this->option('changed'));
 
-        return $failed ? self::FAILURE : self::SUCCESS;
+        if ($this->option('queue')) {
+            RegenerateBlog::dispatch($deployment->id);
+            $this->info("Regeneración encolada ({$deployment->total_items} artículos). La procesará el cron de la cola.");
+
+            return self::SUCCESS;
+        }
+
+        $this->info("Regenerando {$deployment->total_items} artículos de «{$blog->name}»…");
+
+        $regenerator->runAll($deployment, function (Deployment $d) {
+            $this->line(sprintf('  %d/%d  (%d archivos, %d con error)', $d->done_items, $d->total_items, $d->files_count, $d->failed_items));
+        });
+
+        $deployment->refresh();
+
+        if ($deployment->status === Deployment::STATUS_OK) {
+            $this->info("Todo publicado: {$deployment->files_count} archivos subidos.");
+
+            return self::SUCCESS;
+        }
+
+        $this->error($deployment->error_message ?: 'La regeneración falló.');
+
+        return self::FAILURE;
     }
 }

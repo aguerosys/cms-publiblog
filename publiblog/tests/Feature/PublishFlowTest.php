@@ -58,7 +58,7 @@ class PublishFlowTest extends TestCase
             $featured = $media->id;
         }
 
-        return $service->save($article, $input + [
+        return $service->save($article, $input + $this->chooseCategory($this->blog) + [
             'title' => '5 consejos para reformar tu cocina',
             'body_html' => $body,
             'excerpt' => 'Un extracto',
@@ -96,29 +96,31 @@ class PublishFlowTest extends TestCase
 
         $this->assertSame('ok', $deployment->status, (string) $deployment->error_message);
         $this->assertSame('published', $article->status);
-        $this->assertSame('000001-5-consejos-para-reformar-tu-cocina.html', $article->remote_path);
+        $this->assertSame('general/5-consejos-para-reformar-tu-cocina.html', $article->remote_path);
         $this->assertNotNull($article->first_published_at);
         $this->assertSame($article->content_hash, $article->published_hash);
         $this->assertFalse($article->hasUnpublishedChanges());
-        $this->assertSame(5, $deployment->files_count); // imagen + html + .htaccess + index.html + sitemap.xml
+        $this->assertSame(6, $deployment->files_count); // imagen + html + .htaccess + index.html + general/index.html + sitemap.xml
 
         $files = $this->remoteFiles();
-        $this->assertContains('000001-5-consejos-para-reformar-tu-cocina.html', $files);
+        $this->assertContains('general/5-consejos-para-reformar-tu-cocina.html', $files);
+        $this->assertContains('general/index.html', $files);
         $this->assertContains('.htaccess', $files);
         $this->assertCount(1, array_filter($files, fn ($f) => str_starts_with($f, 'img/')));
         $this->assertNotContains('.htaccess.bak', $files); // no había .htaccess previo
 
         $html = file_get_contents($this->remoteDir.'/'.$article->remote_path);
         $this->assertStringContainsString('<meta name="blog-article-id" content="000001">', $html);
-        $this->assertStringContainsString('<link rel="canonical" href="https://cliente-a.com/blog/5-consejos-para-reformar-tu-cocina">', $html);
+        $this->assertStringContainsString('<link rel="canonical" href="https://cliente-a.com/blog/general/5-consejos-para-reformar-tu-cocina">', $html);
         $this->assertStringContainsString('<html lang="es">', $html);
         $this->assertSame(1, preg_match_all('/<h1[\s>]/', $html));
         $this->assertStringContainsString('/blog/img/'.date('Y').'/', $html);
 
-        $this->assertStringContainsString(
-            'RewriteRule ^5-consejos-para-reformar-tu-cocina/?$ 000001-5-consejos-para-reformar-tu-cocina.html [END]',
-            file_get_contents($this->remoteDir.'/.htaccess')
-        );
+        // El .htaccess no lleva una regla por artículo: solo las genéricas.
+        $ht = file_get_contents($this->remoteDir.'/.htaccess');
+        $this->assertStringContainsString('RewriteRule ^(.+)$ $1.html [END]', $ht);
+        $this->assertStringNotContainsString('5-consejos', $ht);
+        $this->assertSame(3, substr_count($ht, 'RewriteRule'));
     }
 
     public function test_files_in_cms_follow_the_documented_layout(): void
@@ -133,7 +135,8 @@ class PublishFlowTest extends TestCase
         $this->assertSame(1, $json['schema_version']);
         $this->assertSame('000001', $json['public_id']);
         $this->assertSame('5-consejos-para-reformar-tu-cocina', $json['slug']);
-        $this->assertSame('https://cliente-a.com/blog/5-consejos-para-reformar-tu-cocina', $json['seo']['canonical']);
+        $this->assertSame('https://cliente-a.com/blog/general/5-consejos-para-reformar-tu-cocina', $json['seo']['canonical']);
+        $this->assertSame([['slug' => 'general', 'name' => 'General']], $json['categories']);
         $this->assertNotNull($storage->readHtml($this->blog->id, '000001'));
     }
 
@@ -161,7 +164,7 @@ class PublishFlowTest extends TestCase
 
         $this->assertSame($before, $this->remoteFiles());
         $this->assertStringContainsString('Párrafo editado', file_get_contents($this->remoteDir.'/'.$article->remote_path));
-        $this->assertSame(1, substr_count(file_get_contents($this->remoteDir.'/.htaccess'), 'RewriteRule'));
+        $this->assertSame(3, substr_count(file_get_contents($this->remoteDir.'/.htaccess'), 'RewriteRule'));
         $this->assertSame('update', $article->fresh()->lastDeployment->action);
     }
 
@@ -188,17 +191,18 @@ class PublishFlowTest extends TestCase
         $ht = file_get_contents($this->remoteDir.'/.htaccess');
         $this->assertStringContainsString("# reglas del cliente\nOptions -Indexes", $ht);
         $this->assertSame(1, substr_count($ht, HtaccessManager::BEGIN));
-        $this->assertSame(2, substr_count($ht, 'RewriteRule'));
+        $this->assertSame(3, substr_count($ht, 'RewriteRule')); // las genéricas, no una por artículo
         $this->assertFileExists($this->remoteDir.'/.htaccess.bak');
 
-        // Eliminar uno: solo queda la regla del otro y lo ajeno no cambia.
+        // Eliminar uno: lo ajeno no cambia y el archivo desaparece.
+        $oneFile = $one->fresh()->remote_path;
         UnpublishArticle::dispatchSync($one->id);
 
         $ht = file_get_contents($this->remoteDir.'/.htaccess');
         $this->assertStringContainsString('Options -Indexes', $ht);
-        $this->assertSame(1, substr_count($ht, 'RewriteRule'));
+        $this->assertSame(3, substr_count($ht, 'RewriteRule'));
         $this->assertStringNotContainsString($one->slug, $ht);
-        $this->assertFileDoesNotExist($this->remoteDir.'/'.$one->fresh()->fileName());
+        $this->assertFileDoesNotExist($this->remoteDir.'/'.$oneFile);
     }
 
     public function test_delete_returns_404_state_and_keeps_json(): void
@@ -348,7 +352,7 @@ class PublishFlowTest extends TestCase
         $this->app->bind(RemoteFilesystemFactory::class, fn () => new RemoteFilesystemFactory());
         $this->assertSame('ok', $this->publish($article->fresh())->status);
         $this->assertSame('published', $article->fresh()->status);
-        $this->assertSame(1, substr_count(file_get_contents($this->remoteDir.'/.htaccess'), 'RewriteRule'));
+        $this->assertSame(3, substr_count(file_get_contents($this->remoteDir.'/.htaccess'), 'RewriteRule'));
     }
 
     public function test_connection_failure_maps_to_connect_and_keeps_blog_usable(): void
@@ -462,19 +466,26 @@ class PublishFlowTest extends TestCase
             $this->assertStringNotContainsString('..', $file);
         }
         $this->assertStringNotContainsString('..', file_get_contents($this->remoteDir.'/.htaccess'));
-        $this->assertSame(realpath($this->remoteDir), realpath(dirname($this->remoteDir.'/'.$article->fresh()->remote_path)));
+        $this->assertStringStartsWith(realpath($this->remoteDir), realpath(dirname($this->remoteDir.'/'.$article->fresh()->remote_path)));
     }
 
     public function test_htaccess_block_ignores_invalid_slugs(): void
     {
         $article = $this->article();
         // Alguien manipula la base de datos con un slug peligroso: la regla no se genera.
-        $article->forceFill(['slug' => "x\nRewriteRule .* http://evil.test [R]", 'remote_path' => '000001-x.html'])->save();
+        $article->forceFill([
+            'slug' => "x\nRewriteRule .* http://evil.test [R]",
+            'remote_path' => '000001-x.html',
+            'redirects' => ["a\nRewriteRule .* http://evil.test [R]", '../etc', 'sin-peligro'],
+        ])->save();
 
         $block = app(HtaccessManager::class)->buildBlock($this->blog);
 
         $this->assertStringNotContainsString('evil.test', $block);
-        $this->assertSame(0, substr_count($block, 'RewriteRule '));
+        $this->assertStringNotContainsString('../etc', $block);
+        // 3 genéricas + la regla del archivo anterior (su nombre sí es válido) + la única redirección válida.
+        $this->assertSame(5, substr_count($block, 'RewriteRule '));
+        $this->assertStringContainsString('RewriteRule ^sin-peligro/?$ https://cliente-a.com/blog/x [R=301,L]', $block);
     }
 
     public function test_reindex_rebuilds_the_same_index(): void

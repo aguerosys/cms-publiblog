@@ -58,6 +58,30 @@ class ArticleStorage
         return json_decode(Storage::disk('blogs')->get($path), true, 512, JSON_THROW_ON_ERROR);
     }
 
+    /**
+     * Copia de lo que está publicado. El JSON editable puede llevar cambios sin publicar:
+     * el listado, el sitemap y la regeneración masiva usan esta copia, no el borrador.
+     */
+    public function writePublishedJson(int $blogId, string $publicId, array $data): void
+    {
+        $this->writeAtomic(
+            $this->relativePath($blogId, $publicId, 'published.json'),
+            json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)
+        );
+    }
+
+    /** Lo publicado; si el artículo se publicó antes de existir la copia, el JSON actual. */
+    public function readLiveJson(int $blogId, string $publicId): ?array
+    {
+        $path = $this->relativePath($blogId, $publicId, 'published.json');
+
+        if (Storage::disk('blogs')->exists($path)) {
+            return json_decode(Storage::disk('blogs')->get($path), true, 512, JSON_THROW_ON_ERROR);
+        }
+
+        return $this->readJson($blogId, $publicId);
+    }
+
     public function readHtml(int $blogId, string $publicId): ?string
     {
         $path = $this->relativePath($blogId, $publicId, 'html');

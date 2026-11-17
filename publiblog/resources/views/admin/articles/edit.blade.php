@@ -6,8 +6,13 @@
     $slugLocked = $article->slugIsLocked();
     $v = fn ($key, $default = '') => old($key, $default);
     $lastDeployment = $deployments->first();
-    $showRetry = $article->status === 'error' || ($lastDeployment && $lastDeployment->status === 'error');
+    $busy = \App\Services\PublishDispatcher::isBusy($article);
+    $showRetry = ! $busy && ($article->status === 'error' || ($lastDeployment && $lastDeployment->status === 'error'));
 @endphp
+
+@if($busy)
+    @push('head')<meta http-equiv="refresh" content="5">@endpush
+@endif
 
 @section('content')
     <div class="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -22,6 +27,13 @@
             </p>
         </div>
     </div>
+
+    @if($busy)
+        <div class="mb-6 flex items-center gap-3 rounded-md border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
+            <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-indigo-600"></span>
+            <span>{{ $lastDeployment->status === 'queued' ? 'En cola: se procesará en menos de un minuto.' : 'Subiendo al servidor del cliente…' }} Esta página se actualiza sola.</span>
+        </div>
+    @endif
 
     @if(session('conflict'))
         <div class="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -56,7 +68,7 @@
                 <div class="mt-4">
                     <label for="slug" class="mb-1 block text-sm font-medium text-gray-700">Slug (URL)</label>
                     <div class="flex items-center gap-1 text-sm text-gray-500">
-                        <span class="shrink-0">{{ $blog->blogUrl() }}/</span>
+                        <span class="shrink-0">{{ $blog->blogUrl() }}/<em>categoría</em>/</span>
                         <input id="slug" name="slug" value="{{ $v('slug', $json['slug'] ?? '') }}" @readonly($slugLocked)
                                class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 {{ $slugLocked ? 'bg-gray-100 text-gray-500' : '' }}">
                     </div>
@@ -128,17 +140,74 @@
                     @if(session('conflict'))
                         <input type="hidden" name="force" value="1">
                     @endif
-                    <button type="submit" name="action" value="publish"
-                            onclick="return confirm('¿Publicar en {{ $blog->domain }}?')"
+                    <button type="submit" name="action" value="publish" @disabled($busy)
+                            onclick="return confirm({{ \Illuminate\Support\Js::from('Vas a publicar en «'.$blog->name.'» ('.$blog->domain.'). El artículo será público. ¿Continuar?') }})"
                             class="w-full rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">
                         {{ session('conflict') ? 'Publicar de todos modos' : ($article->first_published_at ? 'Publicar cambios' : 'Publicar') }}
                     </button>
-                    <button type="submit" name="action" value="save"
+                    <button type="submit" name="action" value="save" @disabled($busy)
                             class="w-full rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium hover:bg-gray-50">
                         {{ session('conflict') ? 'Guardar de todos modos' : 'Guardar borrador' }}
                     </button>
                 </div>
                 <p class="mt-3 text-xs text-gray-500">Se publicará en <strong>{{ $blog->domain }}</strong>.</p>
+            </div>
+
+            <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+                <div class="mb-4 flex items-center justify-between">
+                    <h2 class="font-semibold">Categorías</h2>
+                    <a href="{{ route('categories.index', $blog) }}" class="text-xs text-indigo-600 hover:underline">Gestionar</a>
+                </div>
+                @php
+                    $chosenIds = collect(old('category_ids', $selectedCategoryIds))->map(fn ($id) => (int) $id)->filter()->all();
+                    $primaryId = (int) old('primary_category_id', $primaryCategoryId);
+                @endphp
+                {{-- Siempre se envía la clave, también con todas desmarcadas. --}}
+                <input type="hidden" name="category_ids[]" value="">
+                <script>
+                    /* La principal sigue a las casillas: la primera que se marca lo es; al quitar la principal pasa a otra marcada (o a ninguna). */
+                    function pbCategoryChanged(box) {
+                        var rows = Array.prototype.slice.call(document.querySelectorAll('[data-category-row]'));
+                        var radio = box.closest('[data-category-row]').querySelector('input[type=radio]');
+                        var current = rows.filter(function (r) { return r.querySelector('input[type=radio]').checked; })[0];
+
+                        if (box.checked && !current) { radio.checked = true; }
+
+                        if (!box.checked && radio.checked) {
+                            radio.checked = false;
+                            var next = rows.filter(function (r) { return r.querySelector('input[type=checkbox]').checked; })[0];
+                            if (next) { next.querySelector('input[type=radio]').checked = true; }
+                        }
+                    }
+                </script>
+                <ul class="space-y-2">
+                    @foreach($categories as $category)
+                        <li class="flex items-center gap-2 text-sm" data-category-row>
+                            <input id="cat-{{ $category->id }}" type="checkbox" name="category_ids[]" value="{{ $category->id }}" @checked(in_array($category->id, $chosenIds, true))
+                                   onchange="pbCategoryChanged(this)">
+                            <label for="cat-{{ $category->id }}" class="flex-1">{{ $category->name }}</label>
+                            <label class="flex items-center gap-1 text-xs text-gray-500">
+                                <input type="radio" name="primary_category_id" value="{{ $category->id }}" @checked($category->id === $primaryId)
+                                       onchange="this.closest('[data-category-row]').querySelector('input[type=checkbox]').checked = true">
+                                principal
+                            </label>
+                        </li>
+                    @endforeach
+                </ul>
+                @if($categories->isEmpty())
+                    <p class="text-sm text-amber-800">Este blog aún no tiene categorías. <a href="{{ route('categories.create', $blog) }}" class="underline">Crea la primera</a> para poder publicar.</p>
+                @endif
+                @error('category_ids')<p class="mt-1 text-sm text-red-600">{{ $message }}</p>@enderror
+                @error('primary_category_id')<p class="mt-1 text-sm text-red-600">{{ $message }}</p>@enderror
+                <p class="mt-3 text-xs text-gray-500">
+                    <strong>Elige al menos una para publicar.</strong> La primera que marques es la principal; puedes cambiarla.
+                    La categoría <strong>principal</strong> forma parte de la URL: <span class="font-mono">{{ $blog->blogUrl() }}/<em>categoría</em>/<em>slug</em></span>.
+                    @if($article->remote_path)
+                        Si la cambias, la dirección actual redirigirá a la nueva automáticamente. Las demás solo agrupan el artículo en sus listados.
+                    @else
+                        Las demás categorías solo agrupan el artículo en sus listados.
+                    @endif
+                </p>
             </div>
 
             <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
@@ -174,7 +243,7 @@
                         @foreach($deployments as $d)
                             <li class="flex items-start justify-between gap-4 py-2">
                                 <span>
-                                    <span class="font-medium">{{ ['publish' => 'Publicación', 'update' => 'Actualización', 'unpublish' => 'Eliminación'][$d->action] ?? $d->action }}</span>
+                                    <span class="font-medium">{{ ['publish' => 'Publicación', 'update' => 'Actualización', 'unpublish' => 'Eliminación', 'regenerate' => 'Regeneración'][$d->action] ?? $d->action }}</span>
                                     @if($d->status === 'error')<span class="text-red-600"> — {{ $d->error_message }}</span>@endif
                                 </span>
                                 <span class="whitespace-nowrap text-xs text-gray-500">
@@ -186,14 +255,33 @@
                 @endif
             </div>
 
+            <div class="rounded-lg border border-gray-200 bg-white p-6 shadow-sm lg:col-span-3 lg:order-last">
+                <h2 class="mb-4 font-semibold">Actividad del artículo</h2>
+                @if($activity->isEmpty())
+                    <p class="text-sm text-gray-500">Sin actividad registrada.</p>
+                @else
+                    <ul class="divide-y divide-gray-100 text-sm">
+                        @foreach($activity as $entry)
+                            <li class="py-2">
+                                <div class="flex flex-wrap justify-between gap-2">
+                                    <span class="font-medium">{{ $entry->label() }}</span>
+                                    <span class="text-xs text-gray-500">{{ $entry->user?->name ?? 'Sistema' }} · {{ $entry->created_at->setTimezone($blog->timezone)->format('d/m/Y H:i') }}</span>
+                                </div>
+                                @include('admin.partials.activity-details', ['entry' => $entry])
+                            </li>
+                        @endforeach
+                    </ul>
+                @endif
+            </div>
+
             <div class="rounded-lg border border-red-200 bg-white p-6 shadow-sm">
                 <h2 class="mb-2 font-semibold text-red-700">Eliminar</h2>
                 <p class="mb-4 text-sm text-gray-600">Retira el artículo del servidor del cliente (la URL pasará a 404). El JSON se conserva en el CMS.</p>
                 <form method="POST" action="{{ route('articles.destroy', [$blog, $article]) }}"
-                      onsubmit="return confirm('¿Eliminar el artículo de {{ $blog->domain }}?')">
+                      onsubmit="return confirm({{ \Illuminate\Support\Js::from('Vas a eliminar el artículo de «'.$blog->name.'» ('.$blog->domain.'). Dejará de estar visible en la web. ¿Continuar?') }})">
                     @csrf
                     @method('DELETE')
-                    <button class="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50">Eliminar artículo</button>
+                    <button @disabled($busy) class="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50">Eliminar artículo</button>
                 </form>
             </div>
         </section>

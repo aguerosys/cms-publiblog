@@ -37,7 +37,7 @@ class ListingTest extends TestCase
     {
         $service = app(ArticleService::class);
         $article = $service->createDraft($this->blog);
-        $service->save($article, [
+        $service->save($article, $this->chooseCategory($this->blog) + [
             'title' => $title, 'body_html' => "<p>Cuerpo de {$title}</p>", 'excerpt' => "Extracto de {$title}",
             'published_at' => sprintf('2026-11-%02dT09:00', $day), 'version' => $article->version,
         ]);
@@ -71,7 +71,7 @@ class ListingTest extends TestCase
         $this->assertStringContainsString('Artículo 3', $p2);
         $this->assertStringContainsString('Artículo 1', $p3);
 
-        $this->assertStringContainsString('href="https://cliente-a.com/blog/articulo-5"', $p1);
+        $this->assertStringContainsString('href="https://cliente-a.com/blog/general/articulo-5"', $p1);
         $this->assertStringContainsString('<link rel="canonical" href="https://cliente-a.com/blog/">', $p1);
         $this->assertStringContainsString('<link rel="canonical" href="https://cliente-a.com/blog/pagina/2/">', $p2);
         $this->assertStringContainsString('<link rel="next" href="https://cliente-a.com/blog/pagina/2/">', $p1);
@@ -87,7 +87,7 @@ class ListingTest extends TestCase
         $all = $this->remote('index.html').$this->remote('pagina/2/index.html').$this->remote('pagina/3/index.html');
 
         foreach ($articles as $a) {
-            $this->assertStringContainsString('/blog/'.$a->slug.'"', $all);
+            $this->assertStringContainsString('/blog/general/'.$a->slug.'"', $all);
         }
     }
 
@@ -106,14 +106,15 @@ class ListingTest extends TestCase
             $this->assertMatchesRegularExpression('/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/', (string) $u->lastmod);
         }
 
-        $this->assertEqualsCanonicalizing(['https://cliente-a.com/blog/uno', 'https://cliente-a.com/blog/dos'], $urls);
+        // Los artículos con su categoría principal en la URL, y la página de la categoría.
+        $this->assertEqualsCanonicalizing(['https://cliente-a.com/blog/general/uno', 'https://cliente-a.com/blog/general/dos', 'https://cliente-a.com/blog/general/'], $urls);
 
         UnpublishArticle::dispatchSync($a->id);
 
         $xml = simplexml_load_string($this->remote('sitemap.xml'));
-        $this->assertCount(1, $xml->url);
-        $this->assertStringNotContainsString('/blog/uno', $this->remote('sitemap.xml'));
-        $this->assertStringNotContainsString('/blog/uno"', $this->remote('index.html'));
+        $this->assertCount(2, $xml->url); // el artículo que queda y su categoría
+        $this->assertStringNotContainsString('/blog/general/uno', $this->remote('sitemap.xml'));
+        $this->assertStringNotContainsString('/blog/general/uno"', $this->remote('index.html'));
     }
 
     public function test_default_sitemap_limit_is_500_urls_per_file(): void
@@ -131,7 +132,8 @@ class ListingTest extends TestCase
 
         $index = simplexml_load_string($this->remote('sitemap.xml'));
         $this->assertSame('sitemapindex', $index->getName());
-        $this->assertCount(3, $index->sitemap);
+        $this->assertCount(4, $index->sitemap); // 3 de artículos y 1 de categorías
+        $this->assertCount(1, simplexml_load_string($this->remote('sitemap-categorias.xml'))->url);
         $this->assertStringContainsString('https://cliente-a.com/blog/sitemap-1.xml', $this->remote('sitemap.xml'));
         $this->assertCount(1, simplexml_load_string($this->remote('sitemap-3.xml'))->url);
         $this->assertCount(2, simplexml_load_string($this->remote('sitemap-1.xml'))->url);
@@ -171,8 +173,8 @@ class ListingTest extends TestCase
 
         $second = $this->publishArticle('Segundo', 2);
 
-        // HTML + .htaccess + index.html + sitemap.xml (no hay más páginas)
-        $this->assertSame(4, $second->lastDeployment->files_count);
+        // HTML + index.html + general/index.html + sitemap.xml (no hay más páginas)
+        $this->assertSame(4, $second->lastDeployment->files_count); // el .htaccess ya no cambia en cada publicación
         $this->assertNotSame($before, $this->remote('index.html'));
         $this->assertFileDoesNotExist($this->remoteDir.'/pagina/2/index.html');
         $this->assertCount(2, $mtimes());
@@ -193,6 +195,8 @@ class ListingTest extends TestCase
 
         $this->assertStringContainsString('Todavía no hay artículos', $this->remote('index.html'));
         $this->assertCount(0, simplexml_load_string($this->remote('sitemap.xml'))->url);
+        // La categoría se quedó sin artículos: su listado y su carpeta desaparecen (no queda una carpeta vacía).
+        $this->assertDirectoryDoesNotExist($this->remoteDir.'/general');
     }
 
     public function test_deleted_index_is_restored_on_next_publication(): void
@@ -220,7 +224,7 @@ class ListingTest extends TestCase
 
         $built = app(ListingBuilder::class)->build($this->blog->fresh());
 
-        $this->assertSame(['index.html', 'sitemap.xml'], array_keys($built));
+        $this->assertSame(['index.html', 'general/index.html', 'sitemap.xml'], array_keys($built));
         $this->assertSame($built['sitemap.xml'], $this->remote('sitemap.xml'));
         $this->assertFileExists(\Storage::disk('blogs')->path("{$this->blog->id}/build/manifest.json"));
         $this->assertFileExists(\Storage::disk('blogs')->path("{$this->blog->id}/build/index.html"));

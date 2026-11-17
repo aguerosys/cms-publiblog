@@ -4,6 +4,7 @@ namespace App\Http\Requests;
 
 use App\Models\Article;
 use App\Models\Blog;
+use App\Models\Category;
 use App\Services\SlugService;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -11,7 +12,11 @@ class ArticleRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return (bool) $this->user()?->isSuperadmin();
+        $user = $this->user();
+
+        return $user !== null
+            && $user->can('write', $this->route('blog'))
+            && $user->can('update', $this->route('article'));
     }
 
     public function isPublish(): bool
@@ -46,6 +51,30 @@ class ArticleRequest extends FormRequest
                         $fail("«{$slug}» es una palabra reservada.");
                     } elseif ($slugs->isTaken($blog, $slug, $article)) {
                         $fail("Ya existe un artículo con el slug «{$slug}».");
+                    }
+                },
+            ],
+            'category_ids' => [
+                'nullable', 'array', 'max:30',
+                function ($attribute, $value, $fail) use ($blog, $publish) {
+                    $ids = array_values(array_unique(array_filter(array_map('intval', (array) $value))));
+
+                    // La principal forma la URL y no se asigna por omisión: para publicar hay que elegir.
+                    if ($publish && ! $ids) {
+                        $fail('Elige al menos una categoría para publicar: la principal forma la dirección del artículo.');
+                    }
+
+                    if ($ids &&Category::where('blog_id', $blog->id)->whereIn('id', $ids)->count() !== count($ids)) {
+                        $fail('Alguna de las categorías no pertenece a este blog.');
+                    }
+                },
+            ],
+            'category_ids.*' => ['nullable', 'integer'],
+            'primary_category_id' => [
+                'nullable', 'integer',
+                function ($attribute, $value, $fail) use ($blog) {
+                    if ($value && ! Category::where('blog_id', $blog->id)->whereKey($value)->exists()) {
+                        $fail('La categoría principal no pertenece a este blog.');
                     }
                 },
             ],

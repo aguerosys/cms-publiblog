@@ -5,26 +5,29 @@ namespace App\Http\Controllers;
 use App\Exceptions\PublishException;
 use App\Exceptions\VersionConflictException;
 use App\Http\Requests\ArticleRequest;
-use App\Jobs\PublishArticle;
-use App\Jobs\UnpublishArticle;
+use App\Models\Activity;
 use App\Models\Article;
 use App\Models\Blog;
 use App\Models\Deployment;
 use App\Models\Media;
 use App\Services\ArticleService;
 use App\Services\MediaService;
+use App\Services\PublishDispatcher;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 
 class ArticleController extends Controller
 {
-    public function __construct(private ArticleService $articles)
+    public function __construct(private ArticleService $articles, private PublishDispatcher $dispatcher)
     {
     }
 
     public function index(Request $request, Blog $blog): View
     {
+        Gate::authorize('view', $blog);
+
         $status = $request->query('status');
 
         $articles = $blog->articles()
@@ -40,6 +43,8 @@ class ArticleController extends Controller
     /** "Nuevo artículo": abre un borrador en blanco con su ID público ya asignado. */
     public function store(Request $request, Blog $blog): RedirectResponse
     {
+        Gate::authorize('write', $blog);
+
         try {
             $article = $this->articles->createDraft($blog, $request->user());
         } catch (PublishException $e) {
@@ -53,6 +58,8 @@ class ArticleController extends Controller
 
     public function edit(Blog $blog, Article $article): View
     {
+        Gate::authorize('view', $article);
+
         $article->setRelation('blog', $blog);
         $json = $this->articles->load($article);
 
@@ -61,13 +68,21 @@ class ArticleController extends Controller
             $featured = Media::where('blog_id', $blog->id)->where('remote_path', $json['featured_image']['file'])->first();
         }
 
+        // Categorías del blog y las que tiene el borrador (puede no tener ninguna: la elige quien edita).
+        $categories = $blog->categories()->orderBy('name')->get();
+        $chosen = collect($json['categories'] ?? [])->pluck('slug')->map(fn ($slug) => $categories->firstWhere('slug', $slug)?->id)->filter()->values();
+
         return view('admin.articles.edit', [
             'blog' => $blog,
             'article' => $article,
             'json' => $json,
+            'categories' => $categories,
+            'selectedCategoryIds' => $chosen->all(),
+            'primaryCategoryId' => $chosen->first(),
             'featured' => $featured,
             'maxUploadBytes' => MediaService::maxUploadBytes(),
             'deployments' => $article->deployments()->latest('id')->limit(8)->get(),
+            'activity' => Activity::with('user')->where('article_id', $article->id)->latest('id')->limit(10)->get(),
             'publishedAtInput' => $article->published_at?->setTimezone($blog->timezone)->format('Y-m-d\TH:i')
                 ?? now($blog->timezone)->format('Y-m-d\TH:i'),
         ]);
@@ -99,6 +114,8 @@ class ArticleController extends Controller
     /** Reintentar vuelve a ejecutar el trabajo completo: los pasos remotos son idempotentes. */
     public function retry(Request $request, Blog $blog, Article $article): RedirectResponse
     {
+        Gate::authorize('update', $article);
+
         $article->setRelation('blog', $blog);
 
         // Si lo que falló fue una eliminación, reintentar es eliminar, no volver a publicar.
@@ -111,7 +128,18 @@ class ArticleController extends Controller
 
     public function destroy(Request $request, Blog $blog, Article $article): RedirectResponse
     {
-        UnpublishArticle::dispatchSync($article->id, $request->user()->id);
+        Gate::authorize('delete', $article);
+
+        try {
+            $queued = $this->dispatcher->unpublish($article, $request->user());
+        } catch (PublishException $e) {
+            return redirect()->route('articles.edit', [$blog, $article])->with('error', $e->getMessage());
+        }
+
+        if ($queued) {
+            return redirect()->route('articles.edit', [$blog, $article])
+                ->with('status', 'Eliminación en cola. La página se actualizará sola cuando termine.');
+        }
 
         $deployment = Deployment::where('article_id', $article->id)->latest('id')->first();
 
@@ -124,7 +152,16 @@ class ArticleController extends Controller
 
     private function publish(Blog $blog, Article $article, Request $request): RedirectResponse
     {
-        PublishArticle::dispatchSync($article->id, $request->user()->id);
+        try {
+            $queued = $this->dispatcher->publish($article, $request->user());
+        } catch (PublishException $e) {
+            return redirect()->route('articles.edit', [$blog, $article])->with('error', $e->getMessage());
+        }
+
+        if ($queued) {
+            return redirect()->route('articles.edit', [$blog, $article])
+                ->with('status', 'Publicación en cola. La página se actualizará sola cuando termine.');
+        }
 
         $article->refresh();
         $deployment = $article->lastDeployment;

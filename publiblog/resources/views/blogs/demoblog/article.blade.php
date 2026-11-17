@@ -17,14 +17,20 @@
     <link rel="stylesheet" href="/css/blog.css">
 </head>
 <body>
-@include('blogs.demoblog.partials.header')
+@siteHeader
 
 <main class="container">
     <article class="post">
         <header class="post-header">
+            @if($article->category)
+            <nav class="breadcrumb" aria-label="Migas de pan"><a href="/blog/">Blog</a> › <a href="{{ $article->category->url }}">{{ $article->category->name }}</a></nav>
+            @endif
             <h1>{{ $article->title }}</h1>
             <p class="post-meta">
                 <time datetime="{{ $article->published_at->toIso8601String() }}">{{ $article->published_at->translatedFormat('j \d\e F \d\e Y') }}</time>
+                @foreach($article->categories as $cat)
+                    · <a href="{{ $cat->url }}">{{ $cat->name }}</a>
+                @endforeach
                 @if($article->author)
                     · {{ $article->author->name }}
                 @endif
@@ -45,6 +51,6 @@
     </article>
 </main>
 
-@include('blogs.demoblog.partials.footer')
+@siteFooter
 </body>
 </html>

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Blog;
+use App\Models\Category;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -16,6 +17,9 @@ class ArticleRenderer
 {
     public const COMMENT = '<!-- Generado por Publiblog. No editar a mano: los cambios se pierden en la siguiente publicación. -->';
 
+    /** @var array<int,array<string,string>> blog_id => [slug => nombre] */
+    private array $names = [];
+
     public function __construct(private HtmlSanitizer $sanitizer)
     {
     }
@@ -24,43 +28,101 @@ class ArticleRenderer
     {
         $view = $this->viewName($blog, 'article');
 
-        $html = view($view, $this->data($blog, $json))->render();
+        $html = view($view, $this->data($blog, $json) + ['__pb' => $this->context($blog)])->render();
 
         return $this->withGeneratedComment($html);
     }
 
     /**
-     * Resumen de un artículo para el listado: solo los campos del contrato de `index`.
+     * Lo que el listado necesita de un artículo publicado, en un formato que se guarda en
+     * `articles.live_summary`: así construir el listado no obliga a abrir cada JSON.
+     *
+     * @return array{title:string,excerpt:string,published_at:string,featured_image:?array,categories:list<string>}
      */
-    public function summary(Blog $blog, array $json): object
+    public function summaryData(Blog $blog, array $json): array
     {
         $a = $this->data($blog, $json)['article'];
 
-        return (object) [
+        return [
             'title' => $a->title,
-            'url' => $a->url,
             'excerpt' => $a->excerpt,
-            'published_at' => $a->published_at,
-            'featured_image' => $a->featured_image,
+            'published_at' => $a->published_at->toIso8601String(),
+            'featured_image' => $a->featured_image ? (array) $a->featured_image : null,
+            'categories' => array_map(fn ($c) => $c->slug, $a->categories),
         ];
     }
 
     /**
-     * Página del listado /blog/. $pagination: current, total, prev_url, next_url.
+     * Elemento del listado (contrato de `index`): title, url, excerpt, published_at, featured_image,
+     * category (la principal) y categories.
+     *
+     * @param  array<string,object>  $categoryMap  slug => objeto categoría (name, slug, url) de este blog
+     */
+    public function summaryObject(Blog $blog, string $url, array $summary, array $categoryMap): object
+    {
+        $tz = $blog->timezone ?: 'UTC';
+        $locale = $blog->locale ?: 'es';
+
+        $categories = [];
+
+        foreach ($summary['categories'] ?? [] as $slug) {
+            if (isset($categoryMap[$slug])) {
+                $categories[] = $categoryMap[$slug];
+            }
+        }
+
+        return (object) [
+            'title' => (string) ($summary['title'] ?? ''),
+            'url' => $url,
+            'excerpt' => (string) ($summary['excerpt'] ?? ''),
+            'published_at' => CarbonImmutable::parse($summary['published_at'])->setTimezone($tz)->locale($locale),
+            'featured_image' => ! empty($summary['featured_image']) ? (object) $summary['featured_image'] : null,
+            'category' => $categories[0] ?? null,
+            'categories' => $categories,
+        ];
+    }
+
+    /** slug => nombre actual de las categorías del blog (si el blog aún no existe en la base de datos, vacío). */
+    public function categoryNames(Blog $blog): array
+    {
+        if (! $blog->exists) {
+            return [];
+        }
+
+        return $this->names[$blog->id] ??= Category::withoutGlobalScopes()
+            ->where('blog_id', $blog->id)->pluck('name', 'slug')->all();
+    }
+
+    public function forgetCategoryNames(): void
+    {
+        $this->names = [];
+    }
+
+    /**
+     * Página del listado /blog/ o, con $category, de /blog/{categoria}/. $pagination: current, total,
+     * prev_url, next_url. $categories es el menú de categorías con artículos (name, slug, url, count).
      *
      * @param  list<object>  $articles
+     * @param  list<object>  $categories
      */
-    public function renderIndex(Blog $blog, array $articles, int $page, int $total): string
+    public function renderIndex(Blog $blog, array $articles, int $page, int $total, ?object $category = null, array $categories = []): string
     {
         $view = $this->viewName($blog, 'index');
-        $base = $blog->blogUrl();
+        $base = $category ? $blog->blogUrl().'/'.$category->slug : $blog->blogUrl();
         $locale = $blog->locale ?: 'es';
 
         $pageUrl = fn (int $n) => $n === 1 ? $base.'/' : $base.'/pagina/'.$n.'/';
-        $title = $blog->name.($page > 1 ? " · Página {$page}" : '');
+        $title = ($category ? "{$category->name} · {$blog->name}" : $blog->name).($page > 1 ? " · Página {$page}" : '');
+
+        $description = $category
+            ? (trim((string) ($category->description ?? '')) ?: "Artículos de {$category->name} en {$blog->name}")
+            : "Artículos de {$blog->name}";
 
         $html = view($view, [
+            '__pb' => $this->context($blog),
             'articles' => $articles,
+            'category' => $category,
+            'categories' => $categories,
             'pagination' => (object) [
                 'current' => $page,
                 'total' => $total,
@@ -69,15 +131,10 @@ class ArticleRenderer
             ],
             'seo' => (object) [
                 'meta_title' => $title,
-                'meta_description' => "Artículos de {$blog->name}".($page > 1 ? ", página {$page}" : ''),
+                'meta_description' => Str::limit($description, 155, '…').($page > 1 ? " Página {$page}." : ''),
                 'canonical' => $pageUrl($page),
             ],
-            'blog' => (object) [
-                'name' => $blog->name,
-                'domain' => $blog->domain,
-                'base_url' => rtrim($blog->base_url, '/'),
-                'locale' => $locale,
-            ],
+            'blog' => $this->blogData($blog),
         ])->render();
 
         return $this->withGeneratedComment($html);
@@ -110,7 +167,24 @@ class ArticleRenderer
         $locale = $blog->locale ?: 'es';
 
         $slug = (string) ($json['slug'] ?? '');
-        $url = $blog->blogUrl().'/'.$slug;
+
+        // Categorías del artículo: la primera es la principal y da la URL. Un JSON anterior a las
+        // categorías no tiene ninguna y conserva su URL /blog/slug.
+        $names = $this->categoryNames($blog);
+        $categories = [];
+
+        foreach ($json['categories'] ?? [] as $c) {
+            if (! empty($c['slug'])) {
+                $categories[] = (object) [
+                    'name' => (string) ($names[$c['slug']] ?? $c['name'] ?? $c['slug']),
+                    'slug' => (string) $c['slug'],
+                    'url' => $blog->blogUrl().'/'.$c['slug'].'/',
+                ];
+            }
+        }
+
+        $primary = $categories[0] ?? null;
+        $url = $blog->blogUrl().'/'.($primary ? $primary->slug.'/' : '').$slug;
         $body = $this->sanitizer->sanitize($json['body_html'] ?? '', $blog);
         $plain = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags($body), ENT_QUOTES | ENT_HTML5, 'UTF-8')));
 
@@ -148,6 +222,8 @@ class ArticleRenderer
                 'updated_at' => $updated,
                 'author' => $author,
                 'featured_image' => $featured,
+                'category' => $primary,
+                'categories' => $categories,
                 'body_html' => $body,
             ],
             'seo' => (object) [
@@ -155,13 +231,25 @@ class ArticleRenderer
                 'meta_description' => trim((string) ($seo['meta_description'] ?? '')) ?: Str::limit($excerpt, 155, '…'),
                 'canonical' => trim((string) ($seo['canonical'] ?? '')) ?: $url,
             ],
-            'blog' => (object) [
-                'name' => $blog->name,
-                'domain' => $blog->domain,
-                'base_url' => rtrim($blog->base_url, '/'),
-                'locale' => $locale,
-            ],
+            'blog' => $this->blogData($blog),
         ];
+    }
+
+    /** Los datos del blog que ve la plantilla (contrato: name, domain, base_url, locale). */
+    public function blogData(Blog $blog): object
+    {
+        return (object) [
+            'name' => $blog->name,
+            'domain' => $blog->domain,
+            'base_url' => rtrim($blog->base_url, '/'),
+            'locale' => $blog->locale ?: 'es',
+        ];
+    }
+
+    /** Para las directivas @siteHeader / @siteFooter: qué plantilla es y si el blog comparte cabecera y pie por SSI. */
+    private function context(Blog $blog): object
+    {
+        return (object) ['template' => (string) $blog->template, 'ssi' => (bool) $blog->ssi_enabled];
     }
 
     private function withGeneratedComment(string $html): string

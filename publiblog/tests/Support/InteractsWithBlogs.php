@@ -3,6 +3,7 @@
 namespace Tests\Support;
 
 use App\Models\Blog;
+use App\Models\Category;
 use App\Models\User;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\File;
@@ -43,6 +44,19 @@ trait InteractsWithBlogs
         ]);
     }
 
+    /**
+     * Lo que manda el formulario cuando quien edita elige una categoría («general», que se crea si hace falta).
+     * Un artículo nuevo NO trae categoría: hay que elegirla para poder publicarlo.
+     *
+     * @return array{category_ids:list<int>, primary_category_id:int}
+     */
+    protected function chooseCategory(Blog $blog, string $slug = 'general'): array
+    {
+        $category = Category::firstOrCreate(['blog_id' => $blog->id, 'slug' => $slug], ['name' => ucfirst($slug)]);
+
+        return ['category_ids' => [$category->id], 'primary_category_id' => $category->id];
+    }
+
     protected function admin(): User
     {
         return User::factory()->create(['role' => 'superadmin']);
@@ -58,18 +72,64 @@ trait InteractsWithBlogs
                 return Http::response('error', $status);
             }
 
-            // Lee el HTML realmente subido, resolviendo la regla del .htaccess como haría Apache.
-            $slug = trim(parse_url($request->url(), PHP_URL_PATH), '/');
-            $slug = substr($slug, strrpos($slug, '/') + 1);
+            // Lee el HTML realmente subido, resolviendo las reglas del .htaccess como haría Apache.
+            $path = trim(parse_url($request->url(), PHP_URL_PATH), '/');
+            $isDir = $path === 'blog' || str_ends_with(parse_url($request->url(), PHP_URL_PATH), '/');
+            $path = preg_replace('#^blog/?#', '', $path);
+
+            // La carpeta de la sonda de SSI puede responder con un error (como un hosting que no permite «Options»).
+            if (str_starts_with($path, '_ssi_probe') && $this->probeStatus !== null) {
+                return Http::response('error', $this->probeStatus);
+            }
+
+            // Directorio: sirve su index.html.
+            if ($isDir) {
+                $path = ($path === '' ? '' : $path.'/').'index';
+            }
+
+            // Regla genérica: /categoria/slug sirve /categoria/slug.html
+            if ($path !== '' && is_file($this->remoteDir.'/'.$path.'.html')) {
+                return Http::response($this->serve($path.'.html'), 200);
+            }
+
+            // Artículos del formato anterior: una regla por artículo.
             $ht = @file_get_contents($this->remoteDir.'/.htaccess') ?: '';
 
-            if (preg_match('#RewriteRule \^'.preg_quote($slug, '#').'/\?\$ (\S+) \[END\]#', $ht, $m)
+            if (preg_match('#RewriteRule \^'.preg_quote($path, '#').'/\?\$ (\S+\.html) \[END\]#', $ht, $m)
                 && is_file($this->remoteDir.'/'.$m[1])) {
-                return Http::response(file_get_contents($this->remoteDir.'/'.$m[1]), 200);
+                return Http::response($this->serve($m[1]), 200);
             }
 
             return Http::response('not found', 404);
         });
+    }
+
+    /** false = el "servidor" no ejecuta las inclusiones SSI (la directiva llega tal cual al navegador). */
+    protected bool $serverRunsSsi = true;
+
+    /** Si no es null, la carpeta de la sonda de SSI responde con este estado HTTP (p. ej. 500). */
+    protected ?int $probeStatus = null;
+
+    /**
+     * Contenido de un archivo tal como lo serviría Apache: si el .htaccess activa el filtro INCLUDES para
+     * los .html y el servidor lo soporta, las directivas <!--#include virtual="/blog/..." --> se sustituyen.
+     */
+    protected function serve(string $relative): string
+    {
+        $html = file_get_contents($this->remoteDir.'/'.$relative);
+        $read = fn (string $f) => @file_get_contents($this->remoteDir.'/'.$f) ?: '';
+        $active = str_contains($read('.htaccess'), 'AddOutputFilter INCLUDES .html')
+            || str_contains($read(dirname($relative).'/.htaccess'), 'AddOutputFilter INCLUDES .html');
+
+        if (! $active || ! $this->serverRunsSsi) {
+            return $html;
+        }
+
+        return preg_replace_callback('#<!--\#include virtual="/blog/([^"]+)" -->#', function ($m) {
+            $file = $this->remoteDir.'/'.$m[1];
+
+            return is_file($file) ? file_get_contents($file) : '[an error occurred while processing this directive]';
+        }, $html);
     }
 
     /** JPEG de prueba, opcionalmente con un segmento EXIF falso, ruidoso para que pese. */

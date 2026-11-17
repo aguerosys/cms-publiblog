@@ -265,8 +265,12 @@ class MediaService
         ) ?? $html;
     }
 
-    /** Imágenes del blog que el artículo usa (cuerpo + destacada). */
-    public function usedMedia(Blog $blog, array $article): Collection
+    /**
+     * Rutas remotas (img/2026/archivo.jpg) que usa un artículo: cuerpo + destacada.
+     *
+     * @return list<string>
+     */
+    public function referencedPaths(array $article): array
     {
         $prefix = '/'.config('publiblog.public_prefix').'/';
         $remote = array_map(fn ($p) => substr($p, strlen($prefix)), $this->publicPathsIn($article['body_html'] ?? ''));
@@ -274,6 +278,14 @@ class MediaService
         if (! empty($article['featured_image']['file'])) {
             $remote[] = $article['featured_image']['file'];
         }
+
+        return array_values(array_unique($remote));
+    }
+
+    /** Imágenes del blog que el artículo usa (cuerpo + destacada). */
+    public function usedMedia(Blog $blog, array $article): Collection
+    {
+        $remote = $this->referencedPaths($article);
 
         if ($remote === []) {
             return collect();

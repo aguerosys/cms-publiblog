@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+use App\Models\Scopes\BlogAccessScope;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Blog extends Model
@@ -14,6 +16,11 @@ class Blog extends Model
 
     protected $guarded = [];
 
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BlogAccessScope('id'));
+    }
+
     /** Las credenciales nunca salen del modelo hacia vistas, JSON ni logs. */
     protected $hidden = ['sftp_secret', 'sftp_passphrase'];
 
@@ -23,6 +30,9 @@ class Blog extends Model
             'sftp_secret' => 'encrypted',
             'sftp_passphrase' => 'encrypted',
             'verify_http' => 'boolean',
+            'ssi_enabled' => 'boolean',
+            'ssi_verified_at' => 'datetime',
+            'pages_stale_at' => 'datetime',
             'sftp_port' => 'integer',
             'posts_per_page' => 'integer',
             'template_version' => 'integer',
@@ -30,9 +40,19 @@ class Blog extends Model
         ];
     }
 
+    public function users(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class)->withPivot('role')->withTimestamps();
+    }
+
     public function articles(): HasMany
     {
         return $this->hasMany(Article::class);
+    }
+
+    public function categories(): HasMany
+    {
+        return $this->hasMany(Category::class);
     }
 
     public function media(): HasMany

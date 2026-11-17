@@ -47,6 +47,22 @@ return [
         'password' => env('PUBLIBLOG_ADMIN_PASSWORD'),
     ],
 
+    // Artículos que procesa cada trabajo de la regeneración masiva.
+    'regenerate_batch' => (int) env('PUBLIBLOG_REGENERATE_BATCH', 25),
+
+    // Comprobar cada lunes que los servidores de los clientes coinciden con el CMS (lee por SFTP todos los artículos).
+    'verify_weekly' => (bool) env('PUBLIBLOG_VERIFY_WEEKLY', false),
+
+    // Publicar sin esperar: true encola cada publicación y la procesa el cron (ver README). Con false la petición espera.
+    'queue_publish' => (bool) env('PUBLIBLOG_QUEUE_PUBLISH', false),
+
+    // Doble factor por correo (F2-3). Actívalo con PUBLIBLOG_2FA=true cuando el correo de producción esté probado.
+    'two_factor' => [
+        'enabled' => (bool) env('PUBLIBLOG_2FA', false),
+        'ttl_minutes' => (int) env('PUBLIBLOG_2FA_TTL', 10),
+        'max_attempts' => (int) env('PUBLIBLOG_2FA_ATTEMPTS', 5),
+    ],
+
     // Detrás de Cloudflare: "*" o lista de IP/CIDR separada por comas. Vacío = no se confía en ningún proxy.
     'trusted_proxies' => env('TRUSTED_PROXIES'),
 

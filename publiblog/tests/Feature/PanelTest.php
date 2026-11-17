@@ -181,7 +181,7 @@ class PanelTest extends TestCase
         $edit->assertDontSee('alert(1)', false);
 
         // Publicar.
-        $this->put(route('articles.update', [$blog, $article]), [
+        $this->put(route('articles.update', [$blog, $article]), $this->chooseCategory($blog) + [
             'action' => 'publish', 'version' => $article->version, 'title' => 'Artículo de prueba', 'slug' => 'articulo-de-prueba',
             'body_html' => $body,
             'featured_media_id' => $media->json('id'), 'published_at' => '2026-11-10T09:30',
@@ -190,7 +190,7 @@ class PanelTest extends TestCase
         $article->refresh();
         $this->assertSame('published', $article->status);
 
-        $html = file_get_contents($this->remoteDir.'/000001-articulo-de-prueba.html');
+        $html = file_get_contents($this->remoteDir.'/general/articulo-de-prueba.html');
         $this->assertStringNotContainsString('<script>alert', $html);
         $this->assertStringNotContainsString('/blogs/', $html); // ninguna URL del CMS en el HTML público
         $this->assertStringContainsString('rel="noopener"', $html);

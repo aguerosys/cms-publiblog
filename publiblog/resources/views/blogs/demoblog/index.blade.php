@@ -15,10 +15,22 @@
     <link rel="stylesheet" href="/css/blog.css">
 </head>
 <body>
-@include('blogs.demoblog.partials.header')
+@siteHeader
 
 <main class="container">
-    <h1 class="list-title">Blog</h1>
+    <h1 class="list-title">{{ $category ? $category->name : 'Blog' }}</h1>
+    @if($category && $category->description)
+        <p class="list-intro">{{ $category->description }}</p>
+    @endif
+
+    @if(count($categories) > 0)
+        <nav class="cats" aria-label="Categorías">
+            <a href="/blog/" @if(! $category) aria-current="page" @endif>Todas</a>
+            @foreach($categories as $cat)
+                <a href="{{ $cat->url }}" @if($category && $category->slug === $cat->slug) aria-current="page" @endif>{{ $cat->name }}</a>
+            @endforeach
+        </nav>
+    @endif
 
     @forelse($articles as $item)
         <article class="list-item">
@@ -28,7 +40,7 @@
                     @if($item->featured_image->height) height="{{ $item->featured_image->height }}" @endif loading="lazy"></a>
             @endif
             <h2><a href="{{ $item->url }}">{{ $item->title }}</a></h2>
-            <p class="post-meta"><time datetime="{{ $item->published_at->toIso8601String() }}">{{ $item->published_at->translatedFormat('j \d\e F \d\e Y') }}</time></p>
+            <p class="post-meta"><time datetime="{{ $item->published_at->toIso8601String() }}">{{ $item->published_at->translatedFormat('j \d\e F \d\e Y') }}</time>@if($item->category) · <a href="{{ $item->category->url }}">{{ $item->category->name }}</a>@endif</p>
             <p>{{ $item->excerpt }}</p>
         </article>
     @empty
@@ -44,6 +56,6 @@
     @endif
 </main>
 
-@include('blogs.demoblog.partials.footer')
+@siteFooter
 </body>
 </html>

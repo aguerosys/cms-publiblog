@@ -6,6 +6,7 @@ use App\Exceptions\PublishException;
 use App\Exceptions\VersionConflictException;
 use App\Models\Article;
 use App\Models\Blog;
+use App\Models\Category;
 use App\Models\Media;
 use App\Models\User;
 use Carbon\CarbonImmutable;
@@ -45,13 +46,16 @@ class ArticleService
         $json = $this->emptyContent($blog, $article, $user);
         $this->writeFiles($blog, $article, $json);
 
+        ActivityLogger::record('article.created', article: $article, userId: $user?->id);
+
         return $article;
     }
 
     /**
      * @param  array{title?:?string,slug?:?string,excerpt?:?string,meta_title?:?string,meta_description?:?string,
      *     body_html?:?string,featured_media_id?:?int,featured_alt?:?string,author_name?:?string,
-     *     published_at?:?string,version?:?int}  $input
+     *     published_at?:?string,version?:?int,category_ids?:?array,primary_category_id?:?int}  $input
+     *     Sin `category_ids` se conservan las categorías que ya tenía; con la clave y vacía, el artículo se queda sin categoría.
      *
      * @throws VersionConflictException
      */
@@ -62,6 +66,10 @@ class ArticleService
         if (! $force && isset($input['version']) && (int) $input['version'] !== $article->version) {
             throw new VersionConflictException($article->version);
         }
+
+        // Datos que el formulario no edita pero hay que conservar (p. ej. el origen de un artículo importado).
+        $previous = $this->storage->readJson($blog->id, $article->public_id);
+        $categories = $this->resolveCategories($blog, $input, $previous ?? []);
 
         $title = trim((string) ($input['title'] ?? ''));
 
@@ -87,14 +95,19 @@ class ArticleService
             'seo' => [
                 'meta_title' => trim((string) ($input['meta_title'] ?? '')),
                 'meta_description' => trim((string) ($input['meta_description'] ?? '')),
-                'canonical' => $slug ? $blog->blogUrl().'/'.$slug : '',
+                'canonical' => $slug && $categories ? $blog->blogUrl().'/'.$categories[0]['slug'].'/'.$slug : '',
             ],
+            'categories' => $categories,
             'published_at' => $published->setTimezone($blog->timezone)->toIso8601String(),
             'updated_at' => now($blog->timezone)->toIso8601String(),
             'author' => ['name' => trim((string) ($input['author_name'] ?? ''))],
             'featured_image' => $this->featuredImage($blog, $input),
             'body_html' => $body,
         ];
+
+        if (! empty($previous['import'])) {
+            $json['import'] = $previous['import'];
+        }
 
         $article->slug = $slug;
         $article->title = $title !== '' ? $title : null;
@@ -108,6 +121,12 @@ class ArticleService
         DB::transaction(function () use ($article) {
             $article->save();
         });
+
+        $changes = ActivityLogger::diffArticle($previous ?? [], $json);
+
+        if ($changes) {
+            ActivityLogger::record('article.saved', article: $article, details: ['changes' => $changes, 'version' => $article->version], userId: $user?->id);
+        }
 
         return $article;
     }
@@ -143,11 +162,96 @@ class ArticleService
             $missing[] = 'slug válido';
         }
 
+        if (empty($json['categories'])) {
+            $missing[] = 'categoría (elige al menos una; la principal forma la URL)';
+        }
+
         if ($missing) {
             throw PublishException::make(PublishException::VALIDATION, 'Falta: '.implode(', ', $missing).'.');
         }
 
+        // Una categoría borrada después de guardar el borrador: hay que elegir otra, no publicar a ciegas.
+        $known = Category::where('blog_id', $article->blog_id)
+            ->whereIn('slug', array_column($json['categories'], 'slug'))->pluck('slug')->all();
+
+        foreach ($json['categories'] as $c) {
+            if (! in_array($c['slug'], $known, true)) {
+                throw PublishException::make(PublishException::VALIDATION, "La categoría «{$c['name']}» ya no existe. Elige otra y vuelve a publicar.");
+            }
+        }
+
         return $json;
+    }
+
+    /**
+     * Refleja en la base de datos lo que está PUBLICADO: categorías (para el listado) y resumen.
+     * Se llama cada vez que el servidor recibe el artículo; nunca con el borrador.
+     */
+    public function syncLive(Article $article, array $liveJson): void
+    {
+        $blog = $article->blog;
+        $slugs = array_values(array_filter(array_column($liveJson['categories'] ?? [], 'slug')));
+        $ids = $slugs ? Category::where('blog_id', $blog->id)->whereIn('slug', $slugs)->pluck('id', 'slug') : collect();
+
+        $sync = [];
+
+        foreach ($slugs as $i => $slug) {
+            if ($ids->has($slug)) {
+                $sync[$ids[$slug]] = ['is_primary' => $i === 0];
+            }
+        }
+
+        $article->liveCategories()->sync($sync);
+
+        $article->timestamps = false;
+        $article->live_summary = $this->renderer->summaryData($blog, $liveJson);
+        $article->saveQuietly();
+    }
+
+    /** El artículo deja de estar publicado: ya no cuenta para ningún listado. */
+    public function clearLive(Article $article): void
+    {
+        $article->liveCategories()->detach();
+        $article->timestamps = false;
+        $article->live_summary = null;
+        $article->saveQuietly();
+    }
+
+    /**
+     * Categorías del JSON, la principal primero: [{slug, name}, …]. Puede estar vacía (un borrador sin elegir
+     * categoría): no se asigna ninguna por omisión, porque la principal forma la URL y la decide quien edita.
+     * Para publicar hace falta al menos una (assertPublishable).
+     *
+     * @return list<array{slug:string,name:string}>
+     */
+    private function resolveCategories(Blog $blog, array $input, array $previous): array
+    {
+        if (array_key_exists('category_ids', $input)) {
+            $ids = array_values(array_unique(array_filter(array_map('intval', (array) $input['category_ids']))));
+            $primary = (int) ($input['primary_category_id'] ?? 0);
+
+            if ($primary && ! in_array($primary, $ids, true)) {
+                array_unshift($ids, $primary);
+            }
+
+            $models = Category::where('blog_id', $blog->id)->whereIn('id', $ids)->get()->keyBy('id');
+            $order = $primary && $models->has($primary) ? array_merge([$primary], array_diff($ids, [$primary])) : $ids;
+
+            $list = [];
+
+            foreach ($order as $id) {
+                if ($models->has($id)) {
+                    $list[] = ['slug' => $models[$id]->slug, 'name' => $models[$id]->name];
+                }
+            }
+        } else {
+            $list = array_values(array_filter(
+                array_map(fn ($c) => ['slug' => (string) ($c['slug'] ?? ''), 'name' => (string) ($c['name'] ?? $c['slug'] ?? '')], $previous['categories'] ?? []),
+                fn ($c) => $c['slug'] !== ''
+            ));
+        }
+
+        return $list;
     }
 
     /** Refleja en el JSON el estado interno del CMS (para poder reconstruir el índice). */
@@ -171,8 +275,10 @@ class ArticleService
             'version' => $article->version,
             'first_published_at' => $article->first_published_at?->toIso8601String(),
             'remote_path' => $article->remote_path,
+            'redirects' => $article->redirects ?? [],
             'published_hash' => $article->published_hash,
             'deleted_at' => $article->deleted_at?->toIso8601String(),
+            'source_ref' => $article->source_ref,
         ];
     }
 
@@ -185,6 +291,7 @@ class ArticleService
             'title' => '',
             'excerpt' => '',
             'seo' => ['meta_title' => '', 'meta_description' => '', 'canonical' => ''],
+            'categories' => [],
             'published_at' => now($blog->timezone)->toIso8601String(),
             'updated_at' => now($blog->timezone)->toIso8601String(),
             'author' => ['name' => $user?->name ?? ''],

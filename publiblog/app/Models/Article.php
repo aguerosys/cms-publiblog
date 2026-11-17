@@ -2,8 +2,11 @@
 
 namespace App\Models;
 
+use App\Models\Scopes\BlogAccessScope;
 use Illuminate\Database\Eloquent\Model;
+use App\Services\ArticleLocator;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
@@ -17,11 +20,31 @@ class Article extends Model
 
     protected $guarded = [];
 
+    /** Qué encontró la última verificación del servidor. */
+    public const REMOTE_LABELS = [
+        'modified' => 'Distinto del publicado',
+        'missing' => 'Falta en el servidor',
+        'missing_media' => 'Faltan imágenes',
+        'no_rule' => 'Falta su regla en el .htaccess',
+    ];
+
+    protected static function booted(): void
+    {
+        static::addGlobalScope(new BlogAccessScope());
+    }
+
     protected function casts(): array
     {
         return [
             'published_at' => 'datetime',
             'first_published_at' => 'datetime',
+            'remote_checked_at' => 'datetime',
+            'import_publish' => 'boolean',
+            'redirects' => 'array',
+            'live_summary' => 'array',
+            // Aunque la instancia tenga `timestamps = false` (publicar no es editar), las fechas siguen siendo fechas.
+            'created_at' => 'datetime',
+            'updated_at' => 'datetime',
             'version' => 'integer',
         ];
     }
@@ -34,6 +57,12 @@ class Article extends Model
     public function media(): HasMany
     {
         return $this->hasMany(Media::class);
+    }
+
+    /** Categorías con las que está PUBLICADO (la que tiene is_primary da la URL). */
+    public function liveCategories(): BelongsToMany
+    {
+        return $this->belongsToMany(Category::class, 'article_category')->withPivot('is_primary');
     }
 
     public function deployments(): HasMany
@@ -57,10 +86,24 @@ class Article extends Model
         return $this->content_hash !== null && $this->content_hash !== $this->published_hash;
     }
 
-    /** Ruta del archivo en el servidor del cliente: 000123-mi-articulo.html */
-    public function fileName(): string
+    /** Ruta pública (relativa a /blog/) del artículo publicado: «cocina/mi-articulo». */
+    public function publicPath(): string
     {
-        return $this->public_id.'-'.$this->slug.'.html';
+        return $this->remote_path
+            ? ArticleLocator::publicPath($this->remote_path)
+            : (string) $this->slug;
+    }
+
+    /** Añade una URL antigua (relativa a /blog/) que debe redirigir a la actual. */
+    public function addRedirect(string $path): void
+    {
+        $list = $this->redirects ?? [];
+
+        if (! in_array($path, $list, true) && ArticleLocator::isValidPath($path)) {
+            $list[] = $path;
+        }
+
+        $this->redirects = array_slice(array_values($list), -ArticleLocator::MAX_REDIRECTS);
     }
 
     /** Carpeta fragmentada (3 primeros dígitos del ID) en el almacenamiento del CMS. */
@@ -71,7 +114,7 @@ class Article extends Model
 
     public function url(): string
     {
-        return $this->blog->blogUrl().'/'.$this->slug;
+        return $this->blog->blogUrl().'/'.$this->publicPath();
     }
 
     public function statusLabel(): string

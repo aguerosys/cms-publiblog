@@ -6,7 +6,7 @@ use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
-/** Fase 1: un único usuario con todos los permisos. Los roles llegan en la fase 2. */
+/** Gestión de blogs (conexión SFTP) y de usuarios: solo superadmin. */
 class EnsureSuperadmin
 {
     public function handle(Request $request, Closure $next): Response

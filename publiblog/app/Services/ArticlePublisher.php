@@ -41,12 +41,12 @@ class ArticlePublisher
     ) {
     }
 
-    public function publish(Article $article, ?User $user = null): Deployment
+    public function publish(Article $article, ?User $user = null, ?int $deploymentId = null): Deployment
     {
         $blog = $article->blog;
         $action = $article->first_published_at ? 'update' : 'publish';
 
-        return $this->run($article, $user, $action, function (FilesystemOperator $fs, Deployment $deployment) use ($article, $blog) {
+        return $this->run($article, $user, $action, $deploymentId, function (FilesystemOperator $fs, Deployment $deployment) use ($article, $blog) {
             $json = $this->articles->assertPublishable($article);
 
             // Se regenera con la plantilla actual, para que lo subido sea siempre lo último.
@@ -68,11 +68,11 @@ class ArticlePublisher
                 }
             }
 
-            RemoteWriter::put($fs, $article->fileName(), $html);
-            $this->count($deployment);
+            $this->place($fs, $article, $json, $html, $deployment);
 
-            $article->remote_path = $article->fileName();
-            $article->save();
+            // Lo que acaba de subirse: base del listado y de la regeneración, aunque luego se edite el borrador.
+            $this->storage->writePublishedJson($blog->id, $article->public_id, $json);
+            $this->articles->syncLive($article, $json);
 
             $block = $this->htaccess->buildBlock($blog, include: $article);
             $applied = $this->htaccess->apply($fs, $block);
@@ -88,39 +88,89 @@ class ArticlePublisher
                 'first_published_at' => $article->first_published_at ?? now(),
                 'content_hash' => $hash,
                 'published_hash' => $hash,
+                'remote_state' => 'ok',
+                'remote_checked_at' => now(),
             ])->save();
         });
     }
 
     /** Retira el artículo del servidor: primero la regla, después el archivo. */
-    public function unpublish(Article $article, ?User $user = null): Deployment
+    public function unpublish(Article $article, ?User $user = null, ?int $deploymentId = null): Deployment
     {
         $blog = $article->blog;
 
         if ($article->remote_path === null) {
             // Nunca llegó al servidor: solo se oculta en el CMS.
             $article->timestamps = false;
-            $deployment = $this->newDeployment($article, $user, 'unpublish');
+            $deployment = $this->newDeployment($article, $user, 'unpublish', $deploymentId);
             $article->delete();
             $this->articles->syncMeta($article);
 
             return $this->finish($deployment, $article, null);
         }
 
-        return $this->run($article, $user, 'unpublish', function (FilesystemOperator $fs, Deployment $deployment) use ($article, $blog) {
+        return $this->run($article, $user, 'unpublish', $deploymentId, function (FilesystemOperator $fs, Deployment $deployment) use ($article, $blog) {
             $block = $this->htaccess->buildBlock($blog, exclude: $article);
             $this->count($deployment, $this->htaccess->apply($fs, $block)['changed'] ? 1 : 0);
 
-            if ($fs->fileExists($article->remote_path)) {
-                $fs->delete($article->remote_path);
+            if (RemoteWriter::remove($fs, $article->remote_path)) {
                 $this->count($deployment);
             }
 
             $this->listing->sync($fs, $blog, exclude: $article, onChange: fn () => $this->count($deployment));
 
+            $this->articles->clearLive($article);
             $article->forceFill(['remote_path' => null, 'status' => Article::STATUS_DRAFT, 'published_hash' => null])->save();
             $article->delete();
         });
+    }
+
+    /**
+     * Sube el HTML a su sitio: `{categoria-principal}/{slug}.html`. Si el artículo estaba publicado en
+     * otro sitio (cambió de categoría principal, o es de antes de las categorías), retira el archivo viejo
+     * y recuerda la URL antigua para redirigirla con un 301.
+     *
+     * Orden: subir el nuevo → borrar el viejo → guardar la nueva ubicación. Si algo falla a medias, el
+     * artículo conserva su ubicación anterior en la base de datos y Reintentar repite el movimiento sin
+     * dejar archivos huérfanos; lo peor que puede pasar es una URL antigua en 404 unos segundos, hasta que
+     * se escriba el .htaccess con su redirección.
+     *
+     * @return bool si el artículo cambió de ubicación
+     */
+    public function place(FilesystemOperator $fs, Article $article, array $json, string $html, ?Deployment $deployment = null): bool
+    {
+        $target = ArticleLocator::fileFromJson($json) ?? $article->remote_path;
+
+        if ($target === null) {
+            throw PublishException::make(PublishException::VALIDATION, 'Falta: categoría.');
+        }
+
+        RemoteWriter::put($fs, $target, $html);
+        $deployment && $this->count($deployment);
+
+        $old = $article->remote_path;
+        $moved = $old !== null && $old !== $target;
+
+        if ($moved) {
+            // Tras cambiar de ubicación pueden coincidir la URL antigua y la nueva (p. ej. A → B → A): no se redirige a sí misma.
+            $oldUrl = ArticleLocator::publicPath($old);
+
+            if (RemoteWriter::remove($fs, $old) && $deployment) {
+                $this->count($deployment);
+            }
+
+            $article->addRedirect($oldUrl);
+        }
+
+        $article->timestamps = false;
+        $article->remote_path = $target;
+        $article->redirects = array_values(array_filter(
+            $article->redirects ?? [],
+            fn ($path) => $path !== ArticleLocator::publicPath($target)
+        ));
+        $article->save();
+
+        return $moved;
     }
 
     /**
@@ -128,7 +178,7 @@ class ArticlePublisher
      *
      * @param  callable(FilesystemOperator, Deployment): void  $work
      */
-    private function run(Article $article, ?User $user, string $action, callable $work): Deployment
+    private function run(Article $article, ?User $user, string $action, ?int $deploymentId, callable $work): Deployment
     {
         $blog = $article->blog;
         // Una publicación con imágenes puede tardar más que el límite por defecto del hosting.
@@ -137,7 +187,7 @@ class ArticlePublisher
         // Publicar no es editar: updated_at (y por tanto el lastmod del sitemap) solo cambia al guardar contenido.
         $article->timestamps = false;
 
-        $deployment = $this->newDeployment($article, $user, $action);
+        $deployment = $this->newDeployment($article, $user, $action, $deploymentId);
         $lock = Cache::lock("blog:{$blog->id}", (int) config('publiblog.publish.lock_ttl'));
         $acquired = false;
 
@@ -156,6 +206,11 @@ class ArticlePublisher
 
             if ($blog->status !== Blog::STATUS_ACTIVE) {
                 $blog->forceFill(['status' => Blog::STATUS_ACTIVE])->save();
+            }
+
+            // Primera referencia de la plantilla: a partir de aquí el panel avisa si cambia (F2-4).
+            if ($blog->template_hash === null) {
+                $blog->forceFill(['template_hash' => TemplateFingerprint::for($blog)])->save();
             }
 
             return $this->finish($deployment, $article, null);
@@ -182,7 +237,7 @@ class ArticlePublisher
         $deployment->files_count += $n;
     }
 
-    private function guardBlog(Blog $blog): void
+    public function guardBlog(Blog $blog): void
     {
         $blog = $blog->fresh();
 
@@ -197,7 +252,7 @@ class ArticlePublisher
     }
 
     /** Registra el fallo sin volcar la traza (podría mostrar fragmentos de credenciales). */
-    private function logFailure(Blog $blog, Article $article, PublishException $error, Throwable $e): void
+    public function logFailure(Blog $blog, ?Article $article, PublishException $error, Throwable $e): void
     {
         $message = $e->getMessage();
 
@@ -209,14 +264,14 @@ class ArticlePublisher
 
         Log::warning('Publiblog: fallo al publicar', [
             'blog_id' => $blog->id,
-            'article_id' => $article->id,
+            'article_id' => $article?->id,
             'code' => $error->errorCode,
             'exception' => get_class($e),
             'message' => $message,
         ]);
     }
 
-    private function applyBlogStatus(Blog $blog, PublishException $error): void
+    public function applyBlogStatus(Blog $blog, PublishException $error): void
     {
         $status = match ($error->errorCode) {
             PublishException::AUTH => Blog::STATUS_CONNECTION_ERROR,
@@ -266,10 +321,24 @@ class ArticlePublisher
         if (! str_contains($response->body(), $needle)) {
             throw PublishException::make(PublishException::VERIFY, '(la página no contiene el ID del artículo)');
         }
+
+        // Con cabecera y pie compartidos, una directiva sin ejecutar significa una página sin cabecera ni pie.
+        if ($blog->ssi_enabled && str_contains($response->body(), '<!--#include')) {
+            throw PublishException::make(PublishException::VERIFY, '(el servidor no está ejecutando las inclusiones SSI: la página saldría sin cabecera ni pie)');
+        }
     }
 
-    private function newDeployment(Article $article, ?User $user, string $action): Deployment
+    private function newDeployment(Article $article, ?User $user, string $action, ?int $existingId = null): Deployment
     {
+        // Desde la cola el registro ya existe («en cola»): pasa a «en curso» en vez de crear otro.
+        $existing = $existingId ? Deployment::withoutGlobalScopes()->find($existingId) : null;
+
+        if ($existing) {
+            $existing->forceFill(['status' => Deployment::STATUS_RUNNING, 'started_at' => now(), 'template_version' => $article->blog->template_version])->save();
+
+            return $existing;
+        }
+
         return Deployment::create([
             'blog_id' => $article->blog_id,
             'article_id' => $article->id,
@@ -302,6 +371,19 @@ class ArticlePublisher
 
         $article->save();
         $this->articles->syncMeta($article);
+
+        $event = $error ? 'article.publish_failed' : match ($deployment->action) {
+            'unpublish' => 'article.unpublished',
+            'update' => 'article.updated',
+            default => 'article.published',
+        };
+
+        ActivityLogger::record($event, article: $article, details: array_filter([
+            'action' => $deployment->action,
+            'error_code' => $error?->errorCode,
+            'error' => $error?->getMessage(),
+            'files' => $deployment->files_count,
+        ], fn ($v) => $v !== null), userId: $deployment->triggered_by);
 
         return $deployment;
     }

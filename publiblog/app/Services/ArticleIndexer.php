@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Article;
 use App\Models\Blog;
+use App\Models\Category;
 use App\Models\Media;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Storage;
@@ -18,6 +19,7 @@ class ArticleIndexer
         private ArticleStorage $storage,
         private ArticleIdService $ids,
         private ArticleRenderer $renderer,
+        private ArticleService $articles,
     ) {
     }
 
@@ -48,8 +50,26 @@ class ArticleIndexer
                 'remote_path' => $cms['remote_path'] ?? null,
                 'content_hash' => $html !== null ? $this->renderer->hash($html) : null,
                 'published_hash' => $cms['published_hash'] ?? null,
+                'source_ref' => $cms['source_ref'] ?? null,
+                'redirects' => $cms['redirects'] ?? [],
             ]);
             $article->save();
+
+            // Las categorías se recrean desde los JSON (el borrador y lo publicado pueden llevar distintas).
+            $live = $article->remote_path ? ($this->storage->readLiveJson($blog->id, $publicId) ?? $json) : null;
+
+            foreach ([$json, $live] as $source) {
+                foreach ($source['categories'] ?? [] as $c) {
+                    if (! empty($c['slug'])) {
+                        Category::firstOrCreate(['blog_id' => $blog->id, 'slug' => $c['slug']], ['name' => $c['name'] ?? $c['slug']]);
+                    }
+                }
+            }
+
+            if ($live && empty($cms['deleted_at'])) {
+                $article->setRelation('blog', $blog);
+                $this->articles->syncLive($article, $live);
+            }
 
             if (! empty($cms['deleted_at'])) {
                 $article->forceFill(['deleted_at' => CarbonImmutable::parse($cms['deleted_at'])->utc()])->saveQuietly();

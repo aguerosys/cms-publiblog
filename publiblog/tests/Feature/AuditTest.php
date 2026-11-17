@@ -60,7 +60,7 @@ class AuditTest extends TestCase
             $featured = $media->id;
         }
 
-        return $service->save($article, [
+        return $service->save($article, $this->chooseCategory($this->blog) + [
             'title' => $title, 'body_html' => $body, 'featured_media_id' => $featured,
             'published_at' => sprintf('2026-11-%02dT09:00', $day), 'version' => $article->version,
         ]);
@@ -117,9 +117,9 @@ class AuditTest extends TestCase
     {
         $article = $this->article();
         PublishArticle::dispatchSync($article->id);
-        $this->assertFileExists($this->remoteDir.'/'.$article->fresh()->fileName());
+        $this->assertFileExists($this->remoteDir.'/'.$article->fresh()->remote_path);
 
-        $this->failWrites('/\.htaccess/');
+        $this->failWrites('/index\.html/'); // el listado se actualiza tras borrar el archivo del artículo
         UnpublishArticle::dispatchSync($article->id);
 
         $article->refresh();
@@ -133,7 +133,7 @@ class AuditTest extends TestCase
             ->assertRedirect(route('articles.index', $this->blog));
 
         $this->assertSoftDeleted('articles', ['id' => $article->id]);
-        $this->assertFileDoesNotExist($this->remoteDir.'/'.$article->fileName());
+        $this->assertFileDoesNotExist($this->remoteDir.'/'.$article->remote_path);
     }
 
     public function test_sftp_blog_without_confirmed_fingerprint_never_connects(): void
@@ -237,13 +237,13 @@ class AuditTest extends TestCase
         $this->artisan('blog:regenerate', ['blog' => $this->blog->id])->assertSuccessful();
 
         foreach ([$a, $b] as $article) {
-            $this->assertFileExists($this->remoteDir.'/'.$article->fresh()->fileName());
+            $this->assertFileExists($this->remoteDir.'/'.$article->fresh()->remote_path);
         }
         $this->assertFileExists($this->remoteDir.'/'.Media::first()->remote_path);
         $this->assertFileExists($this->remoteDir.'/.htaccess');
         $this->assertFileExists($this->remoteDir.'/index.html');
         $this->assertFileExists($this->remoteDir.'/sitemap.xml');
-        $this->assertSame(2, substr_count(file_get_contents($this->remoteDir.'/.htaccess'), 'RewriteRule '));
+        $this->assertSame(3, substr_count(file_get_contents($this->remoteDir.'/.htaccess'), 'RewriteRule '));
     }
 
     public function test_regenerate_stops_on_connection_problems(): void
@@ -256,12 +256,12 @@ class AuditTest extends TestCase
         $this->artisan('blog:regenerate', ['blog' => $this->blog->id])->assertFailed();
     }
 
-    public function test_non_superadmin_users_cannot_use_the_panel(): void
+    public function test_users_without_assigned_blogs_cannot_use_other_blogs(): void
     {
         $editor = User::factory()->create(['role' => 'editor']);
 
-        $this->actingAs($editor)->get('/blogs')->assertForbidden();
-        $this->actingAs($editor)->post(route('articles.store', $this->blog))->assertForbidden();
+        $this->actingAs($editor)->get('/blogs')->assertOk()->assertDontSee($this->blog->name);
+        $this->actingAs($editor)->post(route('articles.store', $this->blog))->assertNotFound();
         $this->actingAs($editor)->post(route('logout'))->assertRedirect(route('login'));
     }
 
