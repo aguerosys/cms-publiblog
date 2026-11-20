@@ -3,6 +3,7 @@
 namespace App\Services\Remote;
 
 use App\Models\Blog;
+use Illuminate\Support\Facades\Log;
 use phpseclib3\Net\SFTP;
 use Throwable;
 
@@ -38,10 +39,15 @@ class ConnectionTester
 
             $sftp->disconnect();
         } catch (Throwable $e) {
+            $this->logUnreachable($blog, get_class($e).': '.$e->getMessage());
+
             return ['ok' => false, 'fingerprint' => null, 'code' => 'connect', 'message' => 'No se pudo conectar con el servidor.'];
         }
 
         if ($fingerprint === null) {
+            // phpseclib no lanza nada cuando el servidor no responde al saludo SSH: devuelve false.
+            $this->logUnreachable($blog, 'el servidor no completó el saludo SSH (puerto cerrado, otro servicio o conexión cortada)');
+
             return ['ok' => false, 'fingerprint' => null, 'code' => 'connect', 'message' => 'No se pudo conectar con el servidor.'];
         }
 
@@ -56,6 +62,20 @@ class ConnectionTester
         $result['fingerprint'] = $fingerprint;
 
         return $result;
+    }
+
+    /**
+     * El panel solo dice «No se pudo conectar»; el motivo real (rechazada, sin respuesta, tiempo agotado, DNS…) queda
+     * en el log. Solo host y puerto: nunca usuario ni credenciales (aún no se han usado en este paso).
+     */
+    private function logUnreachable(Blog $blog, string $reason): void
+    {
+        Log::warning('Publiblog: la prueba de conexión no llegó al servidor SSH', [
+            'blog_id' => $blog->id,
+            'host' => $blog->sftp_host,
+            'port' => (int) $blog->sftp_port ?: 22,
+            'reason' => $reason,
+        ]);
     }
 
     /** @return array{ok:bool, fingerprint:?string, message:string, code:?string} */
