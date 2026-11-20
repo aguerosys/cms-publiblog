@@ -227,22 +227,78 @@ class TemplateFeaturesTest extends TestCase
         $this->blog->update(['template' => 'dialogfy']);
         $article = $this->publishArticle('Los agentes de IA cambian la atención', 1, '<h2>Subtítulo</h2><p>Texto</p>');
 
-        $css = file_get_contents(resource_path('views/blogs/dialogfy/assets/blog.css'));
-        $this->assertSame($css, $this->remote('_assets/blog.css'));
+        // El artículo carga post.css y el listado blog.css (como la web actual); el CMS publica los dos.
+        $blogCss = file_get_contents(resource_path('views/blogs/dialogfy/assets/blog.css'));
+        $postCss = file_get_contents(resource_path('views/blogs/dialogfy/assets/post.css'));
+        $this->assertSame($blogCss, $this->remote('_assets/blog.css'));
+        $this->assertSame($postCss, $this->remote('_assets/post.css'));
 
         $page = $this->remote($article->remote_path);
         $this->assertStringContainsString('href="https://dialogfy.com/styles.css"', $page);
-        $this->assertStringContainsString('href="/blog/_assets/blog.css?v='.$this->version($css).'"', $page);
+        $this->assertStringContainsString('href="/blog/_assets/post.css?v='.$this->version($postCss).'"', $page);
+        $this->assertStringNotContainsString('blog.css', $page);
         $this->assertStringContainsString('<symbol id="i-flecha"', $page);          // sprite de iconos (cabecera)
         $this->assertStringContainsString('class="pie__grid"', $page);              // pie
         $this->assertStringContainsString('src="https://dialogfy.com/main.js"', $page);
-        $this->assertStringContainsString('<div class="post-body">', $page);
+        $this->assertStringContainsString('<div class="post__cuerpo">', $page);
+        $this->assertStringContainsString('<title>Los agentes de IA cambian la atención | Blog Dialogfy</title>', $page);
+        $this->assertStringContainsString('<meta name="blog-article-id" content="'.$article->public_id.'">', $page);
+        $this->assertStringContainsString('Servicios relacionados', $page);         // bloques fijos del post
         $this->assertSame(1, preg_match_all('#<h1[\s>]#', $page));
 
         $index = $this->remote('index.html');
+        $this->assertStringContainsString('href="/blog/_assets/blog.css?v='.$this->version($blogCss).'"', $index);
         $this->assertStringContainsString('class="blog-tarjeta"', $index);
         $this->assertStringContainsString('nav class="blog-categorias"', $index); // menú de categorías (hay una con artículos)
         $this->assertStringContainsString('· 1 min', $index);                     // tiempo de lectura en la tarjeta
+    }
+
+    public function test_dialogfy_listing_titles_follow_the_current_web_and_mark_the_page_number(): void
+    {
+        $this->blog->update(['template' => 'dialogfy']);
+
+        foreach (range(1, 3) as $i) {
+            $this->publishArticle("Artículo {$i}", $i);
+        }
+
+        $this->assertStringContainsString('<title>Blog de atención al cliente, WhatsApp e IA | Dialogfy</title>', $this->remote('index.html'));
+        $this->assertStringContainsString('<title>General | Blog Dialogfy</title>', $this->remote('general/index.html'));
+        $this->assertStringContainsString('<title>Blog de atención al cliente, WhatsApp e IA | Dialogfy · Página 2</title>', $this->remote('pagina/2/index.html'));
+        $this->assertStringContainsString('content="Artículos sobre atención al cliente, WhatsApp para empresas', $this->remote('index.html'));
+    }
+
+    public function test_dialogfy_article_shows_author_table_of_contents_and_anchored_headings(): void
+    {
+        $this->blog->update(['template' => 'dialogfy']);
+
+        $service = app(ArticleService::class);
+        $article = $service->createDraft($this->blog);
+        $service->save($article, $this->chooseCategory($this->blog) + [
+            'title' => 'Con índice', 'author_name' => 'Paula', 'published_at' => '2026-05-29T14:30', 'version' => $article->version,
+            'body_html' => '<p>Entradilla.</p><h2>Qué es un agente</h2><p>a</p><h3>Detalle</h3><p>b</p><h2>Por qué importa</h2><p>c</p>',
+        ]);
+        PublishArticle::dispatchSync($article->id);
+
+        $page = $this->remote($article->fresh()->remote_path);
+
+        $this->assertStringContainsString('Por <strong>Paula</strong>', $page);
+        $this->assertStringContainsString('<p class="post__indice-titulo" id="t-indice">Tabla de contenidos</p>', $page);
+        $this->assertStringContainsString('<li><a href="#que-es-un-agente">Qué es un agente</a></li>', $page);
+        $this->assertStringContainsString('<li><a href="#por-que-importa">Por qué importa</a></li>', $page);
+        $this->assertStringContainsString('<h2 id="que-es-un-agente">Qué es un agente</h2>', $page);
+        $this->assertStringContainsString('<h3 id="detalle">Detalle</h3>', $page);
+        $this->assertStringNotContainsString('post__rejilla--sin-indice', $page);
+    }
+
+    public function test_dialogfy_article_without_enough_headings_has_no_index_and_uses_one_column(): void
+    {
+        $this->blog->update(['template' => 'dialogfy']);
+        $article = $this->publishArticle('Corto', 1, '<p>Solo texto.</p><h2>Un apartado</h2><p>x</p>');
+
+        $page = $this->remote($article->remote_path);
+
+        $this->assertStringNotContainsString('Tabla de contenidos', $page);
+        $this->assertStringContainsString('post__rejilla--sin-indice', $page);
     }
 
     public function test_dialogfy_shares_its_header_and_footer_in_ssi_mode(): void
@@ -300,6 +356,56 @@ class TemplateFeaturesTest extends TestCase
         $this->assertSame('General', $category['CollectionPage']['name']);
         $this->assertSame(2, count($category['CollectionPage']['mainEntity']['itemListElement']));
         $this->assertSame(['Cliente A', 'Blog', 'General'], array_column($category['BreadcrumbList']['itemListElement'], 'name'));
+    }
+
+    public function test_structured_data_describes_the_image_and_the_reading_time(): void
+    {
+        $json = [
+            'schema_version' => 1, 'public_id' => '000001', 'slug' => 'con-imagen', 'title' => 'Con imagen', 'excerpt' => 'x',
+            'seo' => ['meta_title' => 'Con imagen', 'meta_description' => 'd', 'canonical' => ''],
+            'published_at' => '2026-11-10T09:30:00+01:00', 'updated_at' => '2026-11-12T11:02:00+01:00',
+            'author' => ['name' => 'Paula'], 'categories' => [['slug' => 'blog', 'name' => 'Blog']],
+            'featured_image' => ['file' => 'img/2026/a.jpg', 'alt' => 'x', 'width' => 515, 'height' => 303],
+            'body_html' => '<p>'.str_repeat('palabra ', 450).'</p>',
+        ];
+
+        $graph = collect($this->jsonLd(app(ArticleRenderer::class)->render($this->blog, $json)))['@graph'];
+        $post = collect($graph)->firstWhere('@type', 'BlogPosting');
+
+        $this->assertSame(['@type' => 'ImageObject', 'url' => 'https://cliente-a.com/blog/img/2026/a.jpg', 'width' => 515, 'height' => 303], $post['image']);
+        $this->assertSame('PT3M', $post['timeRequired']);
+        $this->assertSame(['@type' => 'Person', 'name' => 'Paula'], $post['author']);
+    }
+
+    // ───────── anclas e índice de contenidos ─────────
+
+    public function test_headings_get_unique_ids_and_only_the_h2_form_the_index(): void
+    {
+        [$html, $toc] = app(\App\Services\TableOfContents::class)->apply(
+            '<p>Texto</p><h2>¿Qué es? Esto &amp; aquello</h2><h3>Detalle</h3><h2>Repetido</h2><h2>Repetido</h2><h2><em>Con</em> etiquetas</h2><h2> </h2><h4>No cuenta</h4>'
+        );
+
+        $this->assertStringContainsString('<h2 id="que-es-esto-aquello">¿Qué es? Esto &amp; aquello</h2>', $html);
+        $this->assertStringContainsString('<h3 id="detalle">Detalle</h3>', $html);
+        $this->assertStringContainsString('<h2 id="repetido">Repetido</h2><h2 id="repetido-2">Repetido</h2>', $html);
+        $this->assertStringContainsString('<h2 id="con-etiquetas"><em>Con</em> etiquetas</h2>', $html);
+        $this->assertStringContainsString('<h2> </h2>', $html);        // un título vacío no recibe ancla
+        $this->assertStringContainsString('<h4>No cuenta</h4>', $html); // h4 no se toca
+
+        $this->assertSame(['que-es-esto-aquello', 'repetido', 'repetido-2', 'con-etiquetas'], array_column($toc, 'id'));
+        $this->assertSame('¿Qué es? Esto & aquello', $toc[0]->text); // texto plano: la plantilla lo escapa
+        $this->assertSame([2, 2, 2, 2], array_column($toc, 'level'));
+    }
+
+    public function test_the_article_exposes_the_index_to_any_template(): void
+    {
+        $data = app(ArticleRenderer::class)->data($this->blog, [
+            'slug' => 'a', 'title' => 'A', 'published_at' => '2026-11-10T09:30:00+01:00',
+            'body_html' => '<h2>Uno</h2><p>x</p><h2>Dos</h2><p>y</p>',
+        ]);
+
+        $this->assertSame(['uno', 'dos'], array_column($data['article']->toc, 'id'));
+        $this->assertStringContainsString('<h2 id="uno">Uno</h2>', $data['article']->body_html);
     }
 
     // ───────── tiempo de lectura ─────────

@@ -49,7 +49,8 @@ Un artículo puede estar en varias categorías; la **principal** (la primera) fo
 | `$article->categories` | lista de todas sus categorías (la primera es la principal), con `->name`, `->slug`, `->url` |
 | `$article->reading_minutes` | tiempo de lectura en minutos (entero, mínimo 1; 200 palabras por minuto) |
 | `$article->word_count` | número de palabras del cuerpo |
-| `$article->body_html` | el cuerpo **ya saneado**; es lo único que se imprime sin escapar |
+| `$article->toc` | índice de contenidos: lista de los `<h2>` del cuerpo, cada uno con `->id` (el ancla), `->text` (texto plano, hay que escaparlo) y `->level` (2). Vacía si no hay apartados |
+| `$article->body_html` | el cuerpo **ya saneado**; es lo único que se imprime sin escapar. Cada `<h2>` y `<h3>` lleva un `id` calculado de su texto (`que-es-un-agente`, único en el artículo) para poder enlazarlos; el editor no escribe ids |
 | `$seo->meta_title`, `$seo->meta_description`, `$seo->canonical` | SEO ya resuelto, con valores por defecto |
 | `$blog->name`, `$blog->domain`, `$blog->base_url`, `$blog->locale` | datos del blog (sin barra final en `base_url`) |
 
@@ -64,6 +65,10 @@ Un artículo puede estar en varias categorías; la **principal** (la primera) fo
 | `$pagination->prev_url`, `->next_url` | URL de la página anterior / siguiente, o `null` |
 | `$pagination->pages` | números de página para pintar «1 … 4 5 **6** 7 8 … 20» (la primera, la última y dos a cada lado de la actual). Cada elemento: `->gap` (`true` = «…»), `->number`, `->url`, `->current` |
 | `$seo`, `$blog` | igual que en el artículo |
+
+**Índice de contenidos.** Para pintarlo: `@if(count($article->toc) > 1)` … `@foreach($article->toc as $h)<a href="#{{ $h->id }}">{{ $h->text }}</a>@endforeach`. Si el artículo tiene menos de dos apartados la plantilla no debería mostrar el índice (y su maquetación a dos columnas debe tener una variante de una).
+
+**Lo que el editor no puede producir.** El editor solo genera las etiquetas listadas en «Lo que el editor puede producir»: no hay clases propias, tarjetas, cajas de «ventajas» ni listas con iconos. Un post de diseño especial se reproduce con CSS sobre lo que sí hay (`h3 + p`, `ul`, el primer `<p>` como entradilla con `.cuerpo > p:first-child`…).
 
 El listado puede estar **vacío** y puede tener **una sola página**: la plantilla debe aguantar ambos casos. En el listado de una categoría el `<h1>` es el nombre de la categoría (`{{ $category ? $category->name : 'Blog' }}`).
 

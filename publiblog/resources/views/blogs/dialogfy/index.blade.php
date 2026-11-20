@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>{{ $seo->meta_title }}</title>
-<meta name="description" content="{{ $seo->meta_description }}" />
+{{-- Título y descripción propios del blog de Dialogfy (los de la web actual); la categoría y la página 2+ los añaden. --}}
+<title>{{ $category ? $category->name.' | Blog Dialogfy' : 'Blog de atención al cliente, WhatsApp e IA | Dialogfy' }}{{ $pagination->current > 1 ? ' · Página '.$pagination->current : '' }}</title>
+<meta name="description" content="{{ $category ? $seo->meta_description : 'Artículos sobre atención al cliente, WhatsApp para empresas, agentes de inteligencia artificial y automatización de conversaciones.' }}" />
 <link rel="canonical" href="{{ $seo->canonical }}" />
 @if($pagination->prev_url)
 <link rel="prev" href="{{ $pagination->prev_url }}" />
@@ -16,8 +17,8 @@
 <meta property="og:type" content="website" />
 <meta property="og:locale" content="es_ES" />
 <meta property="og:site_name" content="Dialogfy" />
-<meta property="og:title" content="{{ $seo->meta_title }}" />
-<meta property="og:description" content="{{ $seo->meta_description }}" />
+<meta property="og:title" content="{{ $category ? $category->name.' | Dialogfy' : 'Blog | Dialogfy' }}" />
+<meta property="og:description" content="{{ $category ? $seo->meta_description : 'Artículos sobre atención al cliente, WhatsApp para empresas, agentes de inteligencia artificial y automatización de conversaciones.' }}" />
 <meta property="og:url" content="{{ $seo->canonical }}" />
 @foreach($articles as $item)
 @if($loop->first && $item->featured_image)

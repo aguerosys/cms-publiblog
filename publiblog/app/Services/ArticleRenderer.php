@@ -227,6 +227,7 @@ class ArticleRenderer
         $primary = $categories[0] ?? null;
         $url = $blog->blogUrl().'/'.($primary ? $primary->slug.'/' : '').$slug;
         $body = $this->sanitizer->sanitize($json['body_html'] ?? '', $blog);
+        [$body, $toc] = app(TableOfContents::class)->apply($body); // ids en <h2>/<h3> e índice de los <h2>
         $plain = trim(preg_replace('/\s+/', ' ', html_entity_decode(strip_tags($body), ENT_QUOTES | ENT_HTML5, 'UTF-8')));
 
         $excerpt = trim((string) ($json['excerpt'] ?? '')) !== '' ? trim($json['excerpt']) : Str::limit($plain, 160, '…');
@@ -270,6 +271,7 @@ class ArticleRenderer
                 'categories' => $categories,
                 'reading_minutes' => $readingMinutes,
                 'word_count' => $words,
+                'toc' => $toc,
                 'body_html' => $body,
             ],
             'seo' => (object) [

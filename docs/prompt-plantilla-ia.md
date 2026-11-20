@@ -42,6 +42,8 @@ En article.blade.php:
   $article->category          (la categoría principal: ->name, ->url; puede ser null)
   $article->categories        (lista de todas sus categorías: ->name, ->url)
   $article->reading_minutes   (entero ≥ 1: tiempo de lectura en minutos)
+  $article->toc               (índice de contenidos: lista de los <h2> del cuerpo con ->id (ancla), ->text y ->level; los <h2>/<h3>
+                               del cuerpo ya llevan su id. Muestra el índice solo si count($article->toc) > 1)
   $article->body_html         (HTML ya saneado)
   $seo->meta_title, $seo->meta_description, $seo->canonical
   $blog->name, $blog->domain, $blog->base_url, $blog->locale
@@ -84,6 +86,11 @@ REGLAS OBLIGATORIAS
 - Dentro de un atributo, escribe & como &amp; (p. ej. en la URL de Google Fonts).
 - No cargues scripts ni estilos nuevos que no estén ya en la página que te paso. No inventes JavaScript.
 - Conserva la cabecera, el menú y el pie con sus mismos enlaces, clases y estructura. No "mejores" el diseño.
+- El cuerpo del artículo SOLO puede contener p, h2-h4, strong, em, ul, ol, li, a, img, table, blockquote, br, hr, figure
+  y figcaption, sin clases ni ids (el editor no los escribe). Si el post de la web usa bloques especiales (tarjetas, cajas,
+  listas con iconos, una clase para la entradilla), reprodúcelos con CSS sobre esas etiquetas (p. ej. el primer <p> como
+  entradilla con ".cuerpo > p:first-child") y dime qué elementos no se pueden reproducir. Un índice de contenidos
+  "con anclas" sale de $article->toc, no se escribe a mano.
 - El cuerpo del artículo irá dentro de un contenedor con la clase "post-body". Dame también el CSS (para un archivo
   blog.css) que estile dentro de ese contenedor: p, h2, h3, h4, strong, em, ul, ol, li, a, img (max-width:100%; height:auto),
   table (con th/td), blockquote, hr, figure y figcaption, usando la tipografía, colores y anchos de la web. Añade también

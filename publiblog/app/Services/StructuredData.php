@@ -37,7 +37,18 @@ class StructuredData
         ];
 
         if ($article->featured_image) {
-            $post['image'] = [$base.$article->featured_image->url];
+            $image = ['@type' => 'ImageObject', 'url' => $base.$article->featured_image->url];
+
+            if ($article->featured_image->width && $article->featured_image->height) {
+                $image['width'] = (int) $article->featured_image->width;
+                $image['height'] = (int) $article->featured_image->height;
+            }
+
+            $post['image'] = $image;
+        }
+
+        if (($article->reading_minutes ?? 0) > 0) {
+            $post['timeRequired'] = 'PT'.(int) $article->reading_minutes.'M';
         }
 
         if ($article->category) {

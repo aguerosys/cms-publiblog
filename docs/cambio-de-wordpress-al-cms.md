@@ -62,7 +62,9 @@ El importador descarga o copia las imágenes de cada entrada a `/blog/img/…` y
 ## Decisiones abiertas y riesgos
 
 - **Reglas genéricas de WordPress** (`category/`, `page/`, `feed/`, `tag/`): pendientes de implementar como una opción del blog con reglas fijas.
-- **Título y descripción SEO del listado**: hoy se generan solos («Dialogfy», «Artículos de Dialogfy»). La web real tiene unos propios («Blog de atención al cliente, WhatsApp e IA | Dialogfy»): conviene poder configurarlos por blog antes del corte.
+- **Título y descripción SEO del listado**: en la plantilla `dialogfy` ya van fijos, iguales a los de la web actual («Blog de atención al cliente, WhatsApp e IA | Dialogfy»; las categorías «{categoría} | Blog Dialogfy»; la página 2+ añade «· Página N»). Para otros clientes se generan solos («{blog}», «Artículos de {blog}») salvo que su plantilla los fije; hacerlos configurables desde el panel sigue siendo una mejora posible.
+- **Bloques especiales de los posts** (cajas de «ventajas», listas con iconos): el editor solo produce títulos, párrafos, listas, tablas, imágenes y citas. Esos bloques pasan a verse como texto normal; las secciones fijas de la plantilla («Servicios relacionados», «Contacto») sí se conservan en todos los artículos.
+- **Datos estructurados**: el CMS genera el `BlogPosting` y las migas (con autor, fechas, imagen con tamaño y tiempo de lectura). No genera el bloque `Organization` con logo ni `about`; si se quiere, se añade a la plantilla o al CMS.
 - **Páginas ajenas al blog que dependen de WordPress** (formularios, widgets, `wp-json`, RSS en el pie, plugins de cookies/analítica del blog): inventariarlas en la fase 2.
 - **Cloudflare**: si hay WAF delante, la comprobación HTTP del CMS puede recibir un 403; permitir la IP del CMS o desactivar «Verificar la URL pública» en ese blog.
 - **Entradas con shortcodes o maquetadores** (Elementor, Divi): el importador limpia Gutenberg y shortcodes habituales y lo anota en el CSV, pero el diseño de esas entradas se reconstruye en el editor.

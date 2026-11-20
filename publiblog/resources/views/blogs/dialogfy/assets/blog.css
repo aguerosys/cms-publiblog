@@ -1,12 +1,10 @@
-/* Blog de Dialogfy. Complementa https://dialogfy.com/styles.css (variables, .contenedor, .migas, botones…).
+/* Portada del blog — Dialogfy. Complementa https://dialogfy.com/styles.css
    Lo publica el CMS en /blog/_assets/blog.css junto con la plantilla. */
-
-/* ───────── Cabecera de portada y de categoría ───────── */
 .blog-cabecera { padding: calc(var(--cabecera) + 56px) 0 48px; background: var(--gris-fondo); border-bottom: 1px solid var(--gris-borde); }
 .blog-cabecera__titulo { margin-top: 18px; font-size: clamp(2.5rem, 5vw, 4rem); font-weight: 700; letter-spacing: -.03em; line-height: 1.05; }
 .blog-cabecera__intro { margin-top: 16px; max-width: 640px; font-size: 1.1875rem; line-height: 1.6; color: var(--tinta-70); }
 
-/* Menú de categorías */
+/* Menú de categorías (solo sale si el blog tiene categorías con artículos) */
 .blog-categorias { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
 .blog-categorias a {
   display: inline-flex; align-items: center; min-height: 40px; padding: 0 18px;
@@ -17,7 +15,6 @@
 .blog-categorias a:hover { border-color: var(--verde); color: var(--verde-texto); }
 .blog-categorias a[aria-current] { background: var(--tinta); border-color: var(--tinta); color: var(--blanco); }
 
-/* ───────── Listado ───────── */
 .blog-listado { padding-top: 64px; }
 .blog-vacio { padding: 48px 0; text-align: center; font-size: 1.125rem; color: var(--tinta-70); }
 .blog-rejilla { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; }
@@ -63,51 +60,9 @@
 .blog-paginacion__anterior svg, .blog-paginacion__siguiente svg { width: 16px; height: 16px; }
 .blog-paginacion__anterior svg { transform: rotate(180deg); }
 
-/* ───────── Artículo ───────── */
-.entrada-cabecera { padding: calc(var(--cabecera) + 48px) 0 36px; background: var(--gris-fondo); border-bottom: 1px solid var(--gris-borde); }
-.entrada__columna { max-width: 780px; margin: 0 auto; }
-.entrada-titulo { margin-top: 18px; font-size: clamp(2rem, 4.2vw, 3.25rem); font-weight: 700; letter-spacing: -.025em; line-height: 1.12; overflow-wrap: anywhere; }
-.entrada-meta { margin-top: 18px; font-size: .9375rem; color: var(--tinta-70); }
-.entrada-meta a { font-weight: 600; color: var(--verde-texto); }
-.entrada-portada { max-width: 980px; margin: 40px auto 0; padding: 0 var(--gutter, 20px); }
-.entrada-portada img { display: block; width: 100%; height: auto; border-radius: var(--radio); border: 1px solid var(--gris-borde); }
-.entrada-contenido { padding-top: 48px; padding-bottom: 24px; }
-.entrada-pie { padding: 8px 0 72px; }
-.entrada-pie__titulo { margin-bottom: 10px; font-size: .875rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--tinta-70); }
-.entrada-pie__volver { display: inline-flex; align-items: center; gap: 8px; margin-top: 28px; font-weight: 600; color: var(--verde-texto); }
-.entrada-pie__volver svg { width: 18px; height: 18px; transform: rotate(180deg); }
-
-/* Cuerpo del artículo (lo que produce el editor: p, h2-h4, strong, em, ul, ol, a, img, table, blockquote, hr, figure) */
-.post-body { font-size: 1.125rem; line-height: 1.75; color: var(--tinta); overflow-wrap: break-word; }
-.post-body > * + * { margin-top: 1.25em; }
-.post-body h2 { margin-top: 2.2em; font-size: 1.75rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.25; }
-.post-body h3 { margin-top: 1.9em; font-size: 1.4rem; font-weight: 600; letter-spacing: -.015em; line-height: 1.3; }
-.post-body h4 { margin-top: 1.7em; font-size: 1.15rem; font-weight: 600; line-height: 1.4; }
-.post-body h2 + *, .post-body h3 + *, .post-body h4 + * { margin-top: .7em; }
-.post-body a { color: var(--verde-texto); text-decoration: underline; text-underline-offset: 3px; }
-.post-body a:hover { text-decoration-thickness: 2px; }
-.post-body ul, .post-body ol { padding-left: 1.5em; }
-.post-body ul { list-style: disc; }
-.post-body ol { list-style: decimal; }
-.post-body li + li { margin-top: .4em; }
-.post-body li > ul, .post-body li > ol { margin-top: .4em; }
-.post-body img { max-width: 100%; height: auto; border-radius: var(--radio); }
-.post-body figure { margin-left: 0; margin-right: 0; }
-.post-body figcaption { margin-top: .6em; font-size: .9rem; color: var(--tinta-70); text-align: center; }
-.post-body blockquote { padding: 4px 0 4px 22px; border-left: 4px solid var(--verde); font-size: 1.1875rem; font-style: italic; color: var(--tinta-70); }
-.post-body hr { border: 0; border-top: 1px solid var(--gris-borde); margin: 2.4em 0; }
-.post-body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: 1rem; }
-.post-body th, .post-body td { padding: 10px 14px; border: 1px solid var(--gris-borde); text-align: left; vertical-align: top; }
-.post-body th { background: var(--gris-fondo); font-weight: 600; }
-
 @media (max-width: 1180px) { .blog-rejilla { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; } }
 @media (max-width: 640px) {
   .blog-rejilla { grid-template-columns: minmax(0, 1fr); }
   .blog-cabecera { padding: calc(var(--cabecera) + 32px) 0 36px; }
   .blog-listado { padding-top: 40px; }
-  .entrada-cabecera { padding: calc(var(--cabecera) + 28px) 0 28px; }
-  .entrada-contenido { padding-top: 32px; }
-  .post-body { font-size: 1.0625rem; }
-  .post-body h2 { font-size: 1.5rem; }
-  .post-body h3 { font-size: 1.25rem; }
 }
