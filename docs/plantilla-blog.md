@@ -8,15 +8,18 @@ Cada cliente tiene una **plantilla**: dos vistas Blade que reproducen la cabecer
 publiblog/resources/views/blogs/{nombre}/
 ├── article.blade.php          un artículo           → /blog/{categoria}/mi-articulo
 ├── index.blade.php            los listados          → /blog/, /blog/pagina/2/, /blog/{categoria}/, /blog/{categoria}/pagina/2/
-└── partials/
-    ├── header.blade.php       cabecera (igual en todas las páginas)
-    └── footer.blade.php       pie (igual en todas las páginas)
+├── partials/
+│   ├── header.blade.php       cabecera (igual en todas las páginas)
+│   └── footer.blade.php       pie (igual en todas las páginas)
+└── assets/                    opcional: el CSS propio del blog, tipografías, imágenes del diseño
+    └── blog.css               → /blog/_assets/blog.css
 ```
 
 - `{nombre}`: solo `a-z`, `0-9`, `-` y `_` (por ejemplo `wedaje` o `dialogf`). Es el valor del campo «Plantilla» del blog.
 - `article` e `index` son obligatorias; sin `index` el blog no se puede dar de alta.
 - **`index` sirve el listado general y los de cada categoría**: es la misma vista (en el general `$category` es `null`).
 - La cabecera y el pie van en `partials/header` y `partials/footer` y se colocan con **`@siteHeader`** y **`@siteFooter`** (una vez cada una, en `article` e `index`). Así el CMS puede copiarlos dentro de cada página (modo por defecto) o compartirlos en un único archivo (SSI, ver más abajo).
+- **`assets/`** (opcional) lleva los archivos de diseño propios del blog. El CMS los sube a `/blog/_assets/` con los listados, solo cuando cambian, y la plantilla los enlaza con `@templateAsset('blog.css')` (ver «Estilos propios del blog»).
 - La plantilla es **código del repositorio**: se revisa, se prueba y se despliega con el resto. No se edita desde el panel.
 
 ## Direcciones (URL)
@@ -44,6 +47,8 @@ Un artículo puede estar en varias categorías; la **principal** (la primera) fo
 | `$article->featured_image` | `null` o un objeto con `->url` (`/blog/img/2026/…`), `->alt`, `->width`, `->height` |
 | `$article->category` | la categoría principal: `->name`, `->slug`, `->url` (o `null` en artículos muy antiguos) |
 | `$article->categories` | lista de todas sus categorías (la primera es la principal), con `->name`, `->slug`, `->url` |
+| `$article->reading_minutes` | tiempo de lectura en minutos (entero, mínimo 1; 200 palabras por minuto) |
+| `$article->word_count` | número de palabras del cuerpo |
 | `$article->body_html` | el cuerpo **ya saneado**; es lo único que se imprime sin escapar |
 | `$seo->meta_title`, `$seo->meta_description`, `$seo->canonical` | SEO ya resuelto, con valores por defecto |
 | `$blog->name`, `$blog->domain`, `$blog->base_url`, `$blog->locale` | datos del blog (sin barra final en `base_url`) |
@@ -52,11 +57,12 @@ Un artículo puede estar en varias categorías; la **principal** (la primera) fo
 
 | Variable | Contenido |
 |---|---|
-| `$articles` | lista de objetos con `->title`, `->url`, `->excerpt`, `->published_at`, `->featured_image`, `->category` (la principal) y `->categories` |
+| `$articles` | lista de objetos con `->title`, `->url`, `->excerpt`, `->published_at`, `->featured_image`, `->category` (la principal), `->categories` y `->reading_minutes` (**puede ser `null`** en artículos publicados antes de existir el dato, hasta que se regenera el blog: usa `@if($item->reading_minutes)`) |
 | `$category` | `null` en el listado general; en el de una categoría, `->name`, `->slug`, `->description` (puede ser `null`), `->url` |
 | `$categories` | menú: las categorías que tienen artículos, por nombre, con `->name`, `->slug`, `->url` (sin contadores, para que un artículo nuevo no cambie las páginas de otras categorías) |
 | `$pagination->current`, `->total` | página actual y número de páginas |
 | `$pagination->prev_url`, `->next_url` | URL de la página anterior / siguiente, o `null` |
+| `$pagination->pages` | números de página para pintar «1 … 4 5 **6** 7 8 … 20» (la primera, la última y dos a cada lado de la actual). Cada elemento: `->gap` (`true` = «…»), `->number`, `->url`, `->current` |
 | `$seo`, `$blog` | igual que en el artículo |
 
 El listado puede estar **vacío** y puede tener **una sola página**: la plantilla debe aguantar ambos casos. En el listado de una categoría el `<h1>` es el nombre de la categoría (`{{ $category ? $category->name : 'Blog' }}`).
@@ -64,6 +70,27 @@ El listado puede estar **vacío** y puede tener **una sola página**: la plantil
 ### Cabecera y pie (`partials/header` y `partials/footer`)
 
 Reciben **solo `$blog`**. Son iguales en todas las páginas: no pueden usar `$article`, `$seo`, `$category` ni nada que cambie de una página a otra (el validador lo comprueba). Son un fragmento: sin `<html>`, `<head>` ni `<body>`, y sin directivas SSI propias. Si el menú necesita marcar la sección activa, eso se hace con CSS o JavaScript de la web del cliente, no desde el parcial.
+
+## Directivas del CMS
+
+Son lo único «especial» que puede usar una plantilla, además de `@if`, `@foreach` y `@forelse`:
+
+| Directiva | Qué hace | Dónde |
+|---|---|---|
+| `@siteHeader` / `@siteFooter` | colocan la cabecera y el pie (copiados en la página o, con SSI, como una inclusión) | una vez cada una, en `article` e `index` |
+| `@templateAsset('blog.css')` | dirección del archivo `assets/blog.css` de la plantilla, con su huella: `/blog/_assets/blog.css?v=1a2b3c4d` | en un `href`/`src`; el nombre va entre comillas y el archivo debe existir |
+| `@structuredData` | datos estructurados (JSON-LD de schema.org) de la página, ya escapados | **una vez, dentro de `<head>`** |
+
+`@structuredData` genera: en el artículo `BlogPosting` (titular, fechas, imagen, autor, categoría, palabras) y migas `BreadcrumbList`; en el listado general `Blog` con sus artículos, y en el de una categoría `CollectionPage`. La plantilla no escribe JSON-LD a mano: un título con comillas o con `</script>` no puede romper la página.
+
+## Estilos propios del blog (`assets/`)
+
+Los estilos de la web del cliente (su `styles.css`) ya están en su servidor y se enlazan con su ruta (`https://cliente.com/styles.css` o `/styles.css`). Lo que es **solo del blog** (listado, tarjetas, paginación, `.post-body`, migas, menú de categorías) va en `assets/blog.css` de la plantilla y lo publica el CMS:
+
+- Se sube a `/blog/_assets/` junto con los listados, **solo si cambió** (mismo control por huella que los listados). Si se borra de la plantilla, desaparece del servidor.
+- El enlace lleva `?v={huella}`: al cambiar el CSS cambia el enlace y ni los navegadores ni Cloudflare sirven la versión vieja. Como el enlace está dentro de cada página, cambiar el CSS pide **«Regenerar blog»** (vuelve a generar los artículos con el enlace nuevo y sube el archivo).
+- Solo se publican archivos de diseño: `css`, `js`, `png`, `jpg`, `gif`, `webp`, `svg`, `ico`, `woff`, `woff2`; nombres sin espacios ni caracteres raros, sin archivos ocultos y hasta 5 MB. Cualquier otra cosa (`.php`, `.html`, `.htaccess`…) no se sube y el validador lo avisa.
+- Una referencia a un archivo que no existe hace fallar la generación (y el validador): nunca sale una página sin sus estilos.
 
 ## Reglas obligatorias
 
@@ -96,14 +123,16 @@ No existen `script`, `style`, `iframe`, formularios ni atributos `on*`: no hace 
 
 - Cargar scripts de terceros que no tenga ya la web del cliente.
 - Depender de variables que no están en las tablas de arriba (el validador las detecta como «sin resolver»).
-- Escribir rutas absolutas con el dominio del cliente: usa `$blog->base_url`, `$article->url`, `$category->url` o rutas desde la raíz.
+- Escribir rutas absolutas con el dominio del cliente **para los enlaces del propio blog**: usa `$blog->base_url`, `$article->url`, `$category->url` o rutas desde la raíz. Los enlaces de la cabecera, el pie y los estilos de la web del cliente se copian tal cual de su web (con su dominio, si lo tienen), y así la plantilla se puede probar en otro dominio antes de salir.
+- Enlazar `blog.css` con una ruta relativa (`href="blog.css"`): en `/blog/{categoria}/{slug}` no resolvería. Usa `@templateAsset`.
+- Escribir JSON-LD a mano: usa `@structuredData`.
 - Meter lógica: bucles sobre el listado, condiciones de «si existe» y poco más.
 
 ## Flujo de trabajo
 
 1. Copiar la carpeta de `demoblog` como punto de partida: `resources/views/blogs/demoblog` → `resources/views/blogs/{cliente}`.
 2. Sustituir cabecera, pie y `<link>` de estilos por los de la web real en los parciales (o usar el [prompt para IA](prompt-plantilla-ia.md)).
-3. Añadir al CSS del cliente (o a un `blog.css` propio) los estilos de `.post-body`, del listado, de las migas de pan y del menú de categorías.
+3. Poner en `assets/blog.css` los estilos de `.post-body`, del listado, de las migas de pan y del menú de categorías, y enlazarlo con `@templateAsset('blog.css')`. (Alternativa: que el equipo de la web los añada a su CSS, como hace `demoblog` con `/css/blog.css`.)
 4. Validar:
    ```bash
    php artisan blog:validate-template {cliente}
@@ -119,7 +148,8 @@ Los artículos publicados son archivos HTML ya generados: **no cambian solos** a
 1. Desplegar el cambio y limpiar las vistas compiladas: `php artisan view:clear`.
 2. En el panel: **Blog → «Regenerar blog»**. Vuelve a generar todos los artículos publicados con la plantilla nueva y sube solo los archivos que cambian (barra de progreso; lo procesa el cron).
 3. Si solo cambió un listado (no los artículos), la regeneración sube únicamente los listados.
-4. Mientras no se regenere, el panel muestra un aviso: «La plantilla ha cambiado desde la última regeneración».
+4. Si cambió un archivo de `assets/` (p. ej. `blog.css`), cambia su huella y por tanto el enlace de **todas** las páginas: se regeneran los artículos (con el enlace nuevo) y se sube el archivo.
+5. Mientras no se regenere, el panel muestra un aviso: «La plantilla ha cambiado desde la última regeneración».
 
 Los artículos con cambios **sin publicar** conservan su borrador: la regeneración solo toca lo que está publicado.
 

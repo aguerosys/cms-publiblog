@@ -59,7 +59,7 @@ Tras cada publicación o eliminación se regeneran `/blog/` (paginado: `index.ht
 
 ## Plantillas
 
-Vistas Blade en `resources/views/blogs/{plantilla}/` (`article.blade.php`, `index.blade.php` + parciales). Solo ven `$article` / `$articles` + `$pagination`, `$seo`, `$blog`, `$category` y `$categories` (contrato en `docs/plantilla-blog.md`). La cabecera y el pie se colocan con `@siteHeader` y `@siteFooter`. `php artisan blog:validate-template {plantilla}` comprueba etiquetas obligatorias, escape, ausencia de PHP suelto y de `{!! !!}` que no sea `body_html`.
+Vistas Blade en `resources/views/blogs/{plantilla}/` (`article.blade.php`, `index.blade.php` + parciales). Solo ven `$article` / `$articles` + `$pagination`, `$seo`, `$blog`, `$category` y `$categories` (contrato en `docs/plantilla-blog.md`). La cabecera y el pie se colocan con `@siteHeader` y `@siteFooter`. **Cada cliente tiene su propia carpeta de plantilla**, con su CSS en `assets/` (`assets/blog.css` se publica en `/blog/_assets/` y se enlaza con `@templateAsset('blog.css')`, con huella para la caché; solo se suben archivos de diseño y solo cuando cambian). `@structuredData` coloca en el `<head>` el JSON-LD (schema.org) que genera el CMS; los artículos llevan `$article->reading_minutes` y los listados `$pagination->pages` (números de página). Plantillas existentes: `demoblog` (base de pruebas, su CSS vive en la web) y `dialogfy` (estilos propios en `assets/`; guía para sustituir su WordPress en `docs/cambio-de-wordpress-al-cms.md`). `php artisan blog:validate-template {plantilla}` comprueba etiquetas obligatorias, escape, ausencia de PHP suelto y de `{!! !!}` que no sea `body_html`.
 
 ## Probar SFTP real en local
 
