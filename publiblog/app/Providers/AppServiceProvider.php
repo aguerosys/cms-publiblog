@@ -31,6 +31,11 @@ class AppServiceProvider extends ServiceProvider
         Blade::directive('siteHeader', fn () => "<?php echo app(\\App\\Services\\SitePartials::class)->render('header', \$blog, \$__pb ?? null); ?>");
         Blade::directive('siteFooter', fn () => "<?php echo app(\\App\\Services\\SitePartials::class)->render('footer', \$blog, \$__pb ?? null); ?>");
 
+        // @templateAsset('blog.css'): dirección del archivo de assets/ de la plantilla (con su huella para la caché).
+        // @structuredData: datos estructurados (JSON-LD) de la página, ya preparados y escapados por el CMS.
+        Blade::directive('templateAsset', fn ($expression) => "<?php echo e(app(\\App\\Services\\TemplateAssets::class)->url(\$__pb ?? null, {$expression})); ?>");
+        Blade::directive('structuredData', fn () => "<?php echo \$__ld ?? ''; ?>");
+
         // Selector de blog del panel: solo los blogs a los que el usuario tiene acceso (filtro global).
         View::composer('admin.layouts.app', function (\Illuminate\View\View $view) {
             $view->with('switchableBlogs', Auth::check() ? Blog::orderBy('name')->get(['id', 'name', 'domain']) : collect());

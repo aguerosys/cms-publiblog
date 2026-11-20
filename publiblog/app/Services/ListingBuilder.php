@@ -101,6 +101,9 @@ class ListingBuilder
         // Cabecera y pie compartidos (solo en modo SSI): se suben con los demás archivos y desaparecen si se desactiva.
         $files += app(SitePartials::class)->files($blog, $this->renderer->blogData($blog));
 
+        // Archivos de diseño de la plantilla (assets/): /blog/_assets/. Se suben solo si cambian y se retiran si desaparecen.
+        $files += app(TemplateAssets::class)->files($blog);
+
         return $files + $this->sitemaps($blog, $articles->all(), $buckets, $objects);
     }
 

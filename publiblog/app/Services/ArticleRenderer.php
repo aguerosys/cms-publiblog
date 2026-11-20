@@ -17,6 +17,9 @@ class ArticleRenderer
 {
     public const COMMENT = '<!-- Generado por Publiblog. No editar a mano: los cambios se pierden en la siguiente publicación. -->';
 
+    /** Velocidad de lectura para el «tiempo de lectura» (palabras por minuto). */
+    public const WORDS_PER_MINUTE = 200;
+
     /** @var array<int,array<string,string>> blog_id => [slug => nombre] */
     private array $names = [];
 
@@ -27,8 +30,12 @@ class ArticleRenderer
     public function render(Blog $blog, array $json): string
     {
         $view = $this->viewName($blog, 'article');
+        $data = $this->data($blog, $json);
 
-        $html = view($view, $this->data($blog, $json) + ['__pb' => $this->context($blog)])->render();
+        $html = view($view, $data + [
+            '__pb' => $this->context($blog),
+            '__ld' => app(StructuredData::class)->article($blog, $data['article'], $data['seo']),
+        ])->render();
 
         return $this->withGeneratedComment($html);
     }
@@ -37,7 +44,7 @@ class ArticleRenderer
      * Lo que el listado necesita de un artículo publicado, en un formato que se guarda en
      * `articles.live_summary`: así construir el listado no obliga a abrir cada JSON.
      *
-     * @return array{title:string,excerpt:string,published_at:string,featured_image:?array,categories:list<string>}
+     * @return array{title:string,excerpt:string,published_at:string,featured_image:?array,categories:list<string>,reading_minutes:int}
      */
     public function summaryData(Blog $blog, array $json): array
     {
@@ -49,6 +56,7 @@ class ArticleRenderer
             'published_at' => $a->published_at->toIso8601String(),
             'featured_image' => $a->featured_image ? (array) $a->featured_image : null,
             'categories' => array_map(fn ($c) => $c->slug, $a->categories),
+            'reading_minutes' => $a->reading_minutes,
         ];
     }
 
@@ -79,6 +87,8 @@ class ArticleRenderer
             'featured_image' => ! empty($summary['featured_image']) ? (object) $summary['featured_image'] : null,
             'category' => $categories[0] ?? null,
             'categories' => $categories,
+            // Los artículos publicados antes de que existiera el dato no lo tienen hasta que se regeneran: la plantilla lo comprueba.
+            'reading_minutes' => isset($summary['reading_minutes']) ? (int) $summary['reading_minutes'] : null,
         ];
     }
 
@@ -118,8 +128,15 @@ class ArticleRenderer
             ? (trim((string) ($category->description ?? '')) ?: "Artículos de {$category->name} en {$blog->name}")
             : "Artículos de {$blog->name}";
 
+        $seo = (object) [
+            'meta_title' => $title,
+            'meta_description' => Str::limit($description, 155, '…').($page > 1 ? " Página {$page}." : ''),
+            'canonical' => $pageUrl($page),
+        ];
+
         $html = view($view, [
             '__pb' => $this->context($blog),
+            '__ld' => app(StructuredData::class)->index($blog, $articles, $category, $seo),
             'articles' => $articles,
             'category' => $category,
             'categories' => $categories,
@@ -128,16 +145,40 @@ class ArticleRenderer
                 'total' => $total,
                 'prev_url' => $page > 1 ? $pageUrl($page - 1) : null,
                 'next_url' => $page < $total ? $pageUrl($page + 1) : null,
+                'pages' => $this->pageWindow($page, $total, $pageUrl),
             ],
-            'seo' => (object) [
-                'meta_title' => $title,
-                'meta_description' => Str::limit($description, 155, '…').($page > 1 ? " Página {$page}." : ''),
-                'canonical' => $pageUrl($page),
-            ],
+            'seo' => $seo,
             'blog' => $this->blogData($blog),
         ])->render();
 
         return $this->withGeneratedComment($html);
+    }
+
+    /**
+     * Números de página para pintar «1 … 4 5 [6] 7 8 … 20»: la primera, la última y dos a cada lado de la actual.
+     * Cada elemento: gap (true = «…»), number, url y current. Un listado de una sola página devuelve solo la 1.
+     *
+     * @param  callable(int):string  $pageUrl
+     * @return list<object>
+     */
+    public function pageWindow(int $current, int $total, callable $pageUrl): array
+    {
+        $numbers = array_unique(array_merge([1, $total], range(max(1, $current - 2), min($total, $current + 2))));
+        sort($numbers);
+
+        $pages = [];
+        $previous = 0;
+
+        foreach ($numbers as $n) {
+            if ($previous && $n > $previous + 1) {
+                $pages[] = (object) ['gap' => true, 'number' => null, 'url' => null, 'current' => false];
+            }
+
+            $pages[] = (object) ['gap' => false, 'number' => $n, 'url' => $pageUrl($n), 'current' => $n === $current];
+            $previous = $n;
+        }
+
+        return $pages;
     }
 
     public function hash(string $html): string
@@ -190,6 +231,9 @@ class ArticleRenderer
 
         $excerpt = trim((string) ($json['excerpt'] ?? '')) !== '' ? trim($json['excerpt']) : Str::limit($plain, 160, '…');
 
+        $words = (int) preg_match_all('/[\p{L}\p{N}]+(?:[\'’-][\p{L}\p{N}]+)*/u', $plain);
+        $readingMinutes = max(1, (int) ceil($words / self::WORDS_PER_MINUTE));
+
         $published = CarbonImmutable::parse($json['published_at'] ?? now())->setTimezone($tz)->locale($locale);
         $updated = CarbonImmutable::parse($json['updated_at'] ?? $json['published_at'] ?? now())->setTimezone($tz)->locale($locale);
 
@@ -224,6 +268,8 @@ class ArticleRenderer
                 'featured_image' => $featured,
                 'category' => $primary,
                 'categories' => $categories,
+                'reading_minutes' => $readingMinutes,
+                'word_count' => $words,
                 'body_html' => $body,
             ],
             'seo' => (object) [

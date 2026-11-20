@@ -13,6 +13,7 @@
     <link rel="next" href="{{ $pagination->next_url }}">
     @endif
     <link rel="stylesheet" href="/css/blog.css">
+    @structuredData
 </head>
 <body>
 @siteHeader
@@ -40,7 +41,7 @@
                     @if($item->featured_image->height) height="{{ $item->featured_image->height }}" @endif loading="lazy"></a>
             @endif
             <h2><a href="{{ $item->url }}">{{ $item->title }}</a></h2>
-            <p class="post-meta"><time datetime="{{ $item->published_at->toIso8601String() }}">{{ $item->published_at->translatedFormat('j \d\e F \d\e Y') }}</time>@if($item->category) · <a href="{{ $item->category->url }}">{{ $item->category->name }}</a>@endif</p>
+            <p class="post-meta"><time datetime="{{ $item->published_at->toIso8601String() }}">{{ $item->published_at->translatedFormat('j \d\e F \d\e Y') }}</time>@if($item->category) · <a href="{{ $item->category->url }}">{{ $item->category->name }}</a>@endif @if($item->reading_minutes) · {{ $item->reading_minutes }} min @endif</p>
             <p>{{ $item->excerpt }}</p>
         </article>
     @empty
@@ -50,7 +51,15 @@
     @if($pagination->total > 1)
         <nav class="pager" aria-label="Paginación">
             @if($pagination->prev_url)<a href="{{ $pagination->prev_url }}" rel="prev">← Anteriores</a>@endif
-            <span>Página {{ $pagination->current }} de {{ $pagination->total }}</span>
+            @foreach($pagination->pages as $p)
+                @if($p->gap)
+                    <span>…</span>
+                @elseif($p->current)
+                    <span aria-current="page">{{ $p->number }}</span>
+                @else
+                    <a href="{{ $p->url }}">{{ $p->number }}</a>
+                @endif
+            @endforeach
             @if($pagination->next_url)<a href="{{ $pagination->next_url }}" rel="next">Siguientes →</a>@endif
         </nav>
     @endif

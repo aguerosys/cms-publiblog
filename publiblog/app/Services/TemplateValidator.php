@@ -150,6 +150,7 @@ class TemplateValidator
             'featured_image' => $img,
             'category' => $itemCategory,
             'categories' => [$itemCategory],
+            'reading_minutes' => 3,
         ];
         $img = (object) ['url' => '/blog/img/2026/a.jpg', 'alt' => 'x', 'width' => 1600, 'height' => 900];
 
@@ -157,8 +158,13 @@ class TemplateValidator
         $scriptCategory = (object) ['name' => self::SCRIPT_TITLE, 'slug' => 'reformas', 'description' => self::SCRIPT_TITLE, 'url' => 'https://ejemplo.com/blog/reformas/'];
         $menu = [$category, $scriptCategory];
 
+        // Un artículo publicado antes de que existiera el tiempo de lectura no lo tiene hasta que se regenera.
+        $old = $mk('Antiguo');
+        $old->reading_minutes = null;
+
         $samples = [
             'listado vacío' => [[], 1, 1],
+            'listado con un artículo sin tiempo de lectura' => [[$old], 1, 1],
             'listado con script en el título' => [[$mk(self::SCRIPT_TITLE, $img), $mk('Segundo')], 1, 3],
             'listado página intermedia' => [[$mk('Tercero')], 2, 3],
             'listado de una categoría' => [[$mk('Primero', $img)], 1, 1, $category],
@@ -206,6 +212,13 @@ class TemplateValidator
         }
 
         $errors = [];
+        $assets = app(TemplateAssets::class);
+
+        foreach ($assets->problems($template) as $problem) {
+            $errors[] = "[assets] {$problem}";
+        }
+
+        $available = $assets->list($template);
 
         foreach (\Illuminate\Support\Facades\File::allFiles($dir) as $file) {
             if (! str_ends_with($file->getFilename(), '.blade.php')) {
@@ -218,6 +231,23 @@ class TemplateValidator
 
             if (preg_match('/<\?(php|=)|@php\b/i', $source)) {
                 $errors[] = "[{$name}] contiene PHP suelto (<?php o @php)";
+            }
+
+            // @templateAsset('archivo'): el nombre es literal y el archivo existe en assets/ (y es publicable).
+            $literal = preg_match_all('/@templateAsset\(\s*([\'"])(.*?)\1\s*\)/', $source, $m) ? $m[2] : [];
+
+            if (substr_count($source, '@templateAsset') !== count($literal)) {
+                $errors[] = "[{$name}] @templateAsset necesita el nombre del archivo entre comillas: @templateAsset('blog.css')";
+            }
+
+            foreach ($literal as $asset) {
+                if (! isset($available[$asset])) {
+                    $errors[] = "[{$name}] @templateAsset('{$asset}'): no existe assets/{$asset} (o no es un archivo publicable)";
+                }
+            }
+
+            if (substr_count($source, '@structuredData') > 1) {
+                $errors[] = "[{$name}] @structuredData debe aparecer una sola vez";
             }
 
             if (preg_match_all('/\{!!\s*(.*?)\s*!!\}/s', $source, $m)) {
@@ -259,7 +289,10 @@ class TemplateValidator
             $errors[] = 'debe haber exactamente un <h1>';
         }
 
-        if (str_contains($html, '{{') || str_contains($html, '}}')) {
+        // Los datos estructurados son JSON: sus llaves anidadas («}}») no son una variable sin resolver.
+        $withoutJsonLd = preg_replace('#<script type="application/ld\+json">.*?</script>#s', '', $html);
+
+        if (str_contains($withoutJsonLd, '{{') || str_contains($withoutJsonLd, '}}')) {
             $errors[] = 'queda sin resolver una variable o un {{';
         }
 
@@ -273,6 +306,15 @@ class TemplateValidator
 
         if (str_contains($html, '<script>alert("xss")</script>')) {
             $errors[] = 'un título con <script> sale sin escapar';
+        }
+
+        // Datos estructurados (@structuredData): cada bloque tiene que ser JSON válido, aunque el título lleve comillas o </script>.
+        if (preg_match_all('#<script type="application/ld\+json">(.*?)</script>#s', $html, $blocks)) {
+            foreach ($blocks[1] as $block) {
+                if (json_decode($block, true) === null) {
+                    $errors[] = 'los datos estructurados (JSON-LD) no son un JSON válido';
+                }
+            }
         }
 
         if (! $this->parses($html)) {

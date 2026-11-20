@@ -15,6 +15,7 @@
     <meta property="og:image" content="{{ $blog->base_url }}{{ $article->featured_image->url }}">
     @endif
     <link rel="stylesheet" href="/css/blog.css">
+    @structuredData
 </head>
 <body>
 @siteHeader
@@ -34,6 +35,7 @@
                 @if($article->author)
                     · {{ $article->author->name }}
                 @endif
+                · {{ $article->reading_minutes }} min de lectura
             </p>
         </header>
 
