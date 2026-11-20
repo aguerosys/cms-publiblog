@@ -2,6 +2,7 @@
 
 namespace App\Services\Remote;
 
+use App\Exceptions\PublishException;
 use App\Models\Blog;
 use Illuminate\Support\Facades\Log;
 use phpseclib3\Net\SFTP;
@@ -18,12 +19,19 @@ class ConnectionTester
     }
 
     /**
-     * @return array{ok:bool, fingerprint:?string, message:string, code:?string}
+     * `trust` y `ca_valid` solo los rellena FTPS: cómo se comprobará el certificado en adelante (`pin` o `ca`) y si es
+     * ahora mismo válido para las autoridades de confianza.
+     *
+     * @return array{ok:bool, fingerprint:?string, message:string, code:?string, trust?:?string, ca_valid?:?bool}
      */
     public function test(Blog $blog, ?string $expectedFingerprint = null): array
     {
         if ($blog->isLocal()) {
             return $this->testWrite($blog, null);
+        }
+
+        if ($blog->isFtps()) {
+            return $this->testFtps($blog, $expectedFingerprint);
         }
 
         $fingerprint = null;
@@ -65,15 +73,102 @@ class ConnectionTester
     }
 
     /**
+     * FTPS: el certificado hace de huella. Confirmación (primera vez, o cambio aceptado): se guarda como `pin` o, si ya es
+     * válido para las autoridades de confianza, como `ca` (así las renovaciones no bloquean el blog). Después, cada
+     * conexión lo vuelve a comprobar (PinnedFtpConnectionProvider).
+     *
+     * @return array{ok:bool, fingerprint:?string, message:string, code:?string, trust:?string, ca_valid:?bool}
+     */
+    private function testFtps(Blog $blog, ?string $expectedFingerprint): array
+    {
+        $host = (string) $blog->sftp_host;
+        $port = (int) $blog->sftp_port ?: 21;
+        $timeout = (int) config('publiblog.publish.sftp_timeout');
+        $certificate = app(FtpsServerCertificate::class);
+
+        try {
+            $fingerprint = $certificate->fingerprint($host, $port, $timeout);
+        } catch (Throwable $e) {
+            $this->logUnreachable($blog, 'FTPS: '.$e->getMessage());
+
+            return ['ok' => false, 'fingerprint' => null, 'code' => 'connect', 'message' => 'No se pudo conectar con el servidor.', 'trust' => null, 'ca_valid' => null];
+        }
+
+        $caValid = $certificate->verifiesAgainstAuthorities($host, $port, $timeout);
+        $known = $expectedFingerprint ?? $blog->host_key_fingerprint;
+        $confirming = $expectedFingerprint !== null;
+
+        // Con certificado de autoridad ya confirmado, una renovación (huella nueva) no es un cambio: se sigue mientras sea válido.
+        $trust = $confirming || ! $known
+            ? ($caValid ? 'ca' : 'pin')
+            : ($blog->ftps_trust ?: 'pin');
+
+        $acceptable = $trust === 'ca' ? $caValid : ($known !== null && hash_equals($known, $fingerprint));
+
+        if ($known && ! $acceptable) {
+            return ['ok' => false, 'fingerprint' => $fingerprint, 'code' => 'hostkey', 'message' => 'El certificado del servidor cambió.', 'trust' => null, 'ca_valid' => $caValid];
+        }
+
+        // Sin certificado confirmado todavía: solo se comprueba la conexión (y el panel pide confirmar la huella).
+        $result = $this->testFtpsWrite($blog, $known ?: $fingerprint, $trust);
+        $result['fingerprint'] = $fingerprint;
+        $result['trust'] = $trust;
+        $result['ca_valid'] = $caValid;
+
+        return $result;
+    }
+
+    /** @return array{ok:bool, fingerprint:?string, message:string, code:?string} */
+    private function testFtpsWrite(Blog $blog, string $fingerprint, string $trust): array
+    {
+        try {
+            $fs = $this->factory->ftpsFilesystem($blog, $fingerprint, $trust);
+            $this->probe($fs);
+        } catch (Throwable $e) {
+            $err = RemoteErrorMapper::map($e);
+
+            // En FTP el servidor puede aceptar el login y fallar al abrir el canal de datos (puertos pasivos cerrados,
+            // TLS en el canal de datos, carpeta sin permiso…): el panel es genérico, el detalle queda en el log.
+            if (! in_array($err->errorCode, [PublishException::AUTH, PublishException::HOSTKEY], true)) {
+                $reasons = [];
+
+                for ($t = $e; $t; $t = $t->getPrevious()) {
+                    $reasons[] = get_class($t).': '.$t->getMessage();
+                }
+
+                Log::warning('Publiblog: la prueba de escritura FTPS falló', [
+                    'blog_id' => $blog->id,
+                    'host' => $blog->sftp_host,
+                    'port' => (int) $blog->sftp_port ?: 21,
+                    'code' => $err->errorCode,
+                    'reason' => implode(' | ', $reasons),
+                ]);
+            }
+
+            return ['ok' => false, 'fingerprint' => null, 'code' => $err->errorCode, 'message' => $err->getMessage()];
+        }
+
+        return ['ok' => true, 'fingerprint' => null, 'code' => null, 'message' => 'Conexión correcta: se puede escribir en la carpeta remota.'];
+    }
+
+    /** Escribe y borra un archivo de prueba en la carpeta remota. */
+    private function probe(\League\Flysystem\FilesystemOperator $fs): void
+    {
+        $probe = '.publiblog-test-'.bin2hex(random_bytes(3));
+        $fs->write($probe, 'ok');
+        $fs->delete($probe);
+    }
+
+    /**
      * El panel solo dice «No se pudo conectar»; el motivo real (rechazada, sin respuesta, tiempo agotado, DNS…) queda
      * en el log. Solo host y puerto: nunca usuario ni credenciales (aún no se han usado en este paso).
      */
     private function logUnreachable(Blog $blog, string $reason): void
     {
-        Log::warning('Publiblog: la prueba de conexión no llegó al servidor SSH', [
+        Log::warning('Publiblog: la prueba de conexión no llegó al servidor '.($blog->isFtps() ? 'FTPS' : 'SSH'), [
             'blog_id' => $blog->id,
             'host' => $blog->sftp_host,
-            'port' => (int) $blog->sftp_port ?: 22,
+            'port' => (int) $blog->sftp_port ?: ($blog->isFtps() ? 21 : 22),
             'reason' => $reason,
         ]);
     }
@@ -91,9 +186,7 @@ class ConnectionTester
                 ));
             }
 
-            $probe = '.publiblog-test-'.bin2hex(random_bytes(3));
-            $fs->write($probe, 'ok');
-            $fs->delete($probe);
+            $this->probe($fs);
         } catch (Throwable $e) {
             $err = RemoteErrorMapper::map($e);
 

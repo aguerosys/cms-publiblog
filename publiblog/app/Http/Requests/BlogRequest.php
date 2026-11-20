@@ -44,7 +44,12 @@ class BlogRequest extends FormRequest
                     }
                 }
             }],
-            'sftp_auth' => ['required', Rule::in($auths)],
+            'protocol' => ['nullable', Rule::in(['sftp', 'ftps'])],
+            'sftp_auth' => ['required', Rule::in($auths), function ($attribute, $value, $fail) {
+                if ($this->input('protocol') === 'ftps' && $value === 'key') {
+                    $fail('FTPS solo admite contraseña: la clave privada es de SFTP.');
+                }
+            }],
             'sftp_host' => [Rule::requiredIf(! $isLocal), 'nullable', 'string', 'max:190'],
             'sftp_port' => ['nullable', 'integer', 'between:1,65535'],
             'sftp_user' => [Rule::requiredIf(! $isLocal), 'nullable', 'string', 'max:190'],
@@ -61,8 +66,9 @@ class BlogRequest extends FormRequest
             'domain' => 'dominio',
             'base_url' => 'URL base',
             'remote_dir' => 'directorio remoto',
-            'sftp_host' => 'servidor SFTP',
-            'sftp_user' => 'usuario SFTP',
+            'protocol' => 'protocolo',
+            'sftp_host' => 'servidor',
+            'sftp_user' => 'usuario',
             'sftp_secret' => 'contraseña o clave',
             'posts_per_page' => 'artículos por página',
             'timezone' => 'zona horaria',

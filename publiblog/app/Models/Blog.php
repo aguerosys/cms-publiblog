@@ -70,6 +70,17 @@ class Blog extends Model
         return $this->sftp_auth === 'local';
     }
 
+    /** ¿Se conecta por FTPS (FTP con TLS) en vez de SFTP? */
+    public function isFtps(): bool
+    {
+        return ! $this->isLocal() && $this->protocol === 'ftps';
+    }
+
+    public function protocolLabel(): string
+    {
+        return $this->isFtps() ? 'FTPS (FTP con TLS)' : 'SFTP';
+    }
+
     public function hasSecret(): bool
     {
         return ! empty($this->getRawOriginal('sftp_secret'));

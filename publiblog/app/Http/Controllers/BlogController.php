@@ -43,6 +43,7 @@ class BlogController extends Controller
     {
         return view('admin.blogs.form', ['blog' => new Blog([
             'remote_dir' => '/blog/',
+            'protocol' => 'sftp',
             'sftp_port' => 22,
             'sftp_auth' => 'password',
             'locale' => 'es',
@@ -70,6 +71,7 @@ class BlogController extends Controller
             'blog' => $blog,
             'articleCount' => $blog->articles()->count(),
             'pendingFingerprint' => session('pending_fingerprint'),
+            'pendingCaValid' => session('pending_ca_valid'),
             'regeneration' => Deployment::where('blog_id', $blog->id)->where('action', 'regenerate')->whereNull('article_id')->latest('id')->first(),
             'templateChanged' => TemplateFingerprint::changed($blog),
             'ssiSupported' => SitePartials::templateSupports((string) $blog->template),
@@ -96,14 +98,16 @@ class BlogController extends Controller
         }
 
         $connectionChanged = $data['sftp_host'] !== $blog->sftp_host
+            || $data['protocol'] !== $blog->protocol
             || (int) $data['sftp_port'] !== (int) $blog->sftp_port
             || $data['sftp_auth'] !== $blog->sftp_auth
             || $data['sftp_user'] !== $blog->sftp_user
             || isset($data['sftp_secret'])
             || $data['remote_dir'] !== $blog->remote_dir;
 
-        if ($data['sftp_host'] !== $blog->sftp_host || (int) $data['sftp_port'] !== (int) $blog->sftp_port) {
-            $data['host_key_fingerprint'] = null;
+        if ($data['sftp_host'] !== $blog->sftp_host || (int) $data['sftp_port'] !== (int) $blog->sftp_port || $data['protocol'] !== $blog->protocol) {
+            $data['host_key_fingerprint'] = null; // otro servidor, puerto o protocolo: hay que confirmar la huella o el certificado de nuevo
+            $data['ftps_trust'] = null;
         }
 
         if ($connectionChanged) {
@@ -132,16 +136,26 @@ class BlogController extends Controller
                 $blog->update(['status' => Blog::STATUS_HOSTKEY_CHANGED]);
             }
 
+            $what = $blog->isFtps() ? 'certificado' : 'huella';
+
             return redirect()->route('blogs.show', $blog)->with([
                 'pending_fingerprint' => $result['fingerprint'],
+                'pending_ca_valid' => $result['ca_valid'] ?? null,
                 'status' => $result['code'] === 'hostkey'
-                    ? 'La huella del servidor ha cambiado. Si el cambio es esperado, confírmala.'
-                    : 'El servidor responde. Comprueba la huella y confírmala para continuar.',
+                    ? "El {$what} del servidor ha cambiado. Si el cambio es esperado, confírmalo."
+                    : "El servidor responde. Comprueba la huella del {$what} y confírmala para continuar.",
             ]);
         }
 
         if ($result['ok']) {
-            $blog->update(['status' => Blog::STATUS_ACTIVE]);
+            $update = ['status' => Blog::STATUS_ACTIVE];
+
+            // FTPS con certificado de una autoridad: una renovación cambia la huella sin ser un cambio de servidor.
+            if ($blog->isFtps() && $result['fingerprint'] && $result['fingerprint'] !== $blog->host_key_fingerprint) {
+                $update['host_key_fingerprint'] = $result['fingerprint'];
+            }
+
+            $blog->update($update);
 
             return redirect()->route('blogs.show', $blog)->with('status', $result['message']);
         }
@@ -215,8 +229,11 @@ class BlogController extends Controller
             return redirect()->route('blogs.show', $blog)->with('error', $result['message']);
         }
 
-        $blog->update(['host_key_fingerprint' => $data['fingerprint'], 'status' => Blog::STATUS_ACTIVE]);
-        ActivityLogger::record('blog.fingerprint_confirmed', $blog, details: ['fingerprint' => $data['fingerprint']]);
+        // FTPS: según el certificado, de ahora en adelante se fija la huella (`pin`) o se valida con las autoridades (`ca`).
+        $trust = $blog->isFtps() ? ($result['trust'] ?? 'pin') : null;
+
+        $blog->update(['host_key_fingerprint' => $data['fingerprint'], 'ftps_trust' => $trust, 'status' => Blog::STATUS_ACTIVE]);
+        ActivityLogger::record('blog.fingerprint_confirmed', $blog, details: ['fingerprint' => $data['fingerprint'], 'trust' => $trust]);
 
         return redirect()->route('blogs.show', $blog)->with('status', 'Huella confirmada. El blog está listo para publicar.');
     }
@@ -225,7 +242,9 @@ class BlogController extends Controller
     {
         $data = $request->validated();
         $data['verify_http'] = $request->boolean('verify_http');
-        $data['sftp_port'] = (int) ($data['sftp_port'] ?? 22) ?: 22;
+        $data['protocol'] = ($data['protocol'] ?? 'sftp') === 'ftps' && $data['sftp_auth'] !== 'local' ? 'ftps' : 'sftp';
+        $defaultPort = $data['protocol'] === 'ftps' ? 21 : 22;
+        $data['sftp_port'] = (int) ($data['sftp_port'] ?? $defaultPort) ?: $defaultPort;
         $data['sftp_host'] = $data['sftp_host'] ?? null;
         $data['sftp_user'] = $data['sftp_user'] ?? null;
         $data['remote_dir'] = $data['sftp_auth'] === 'local'

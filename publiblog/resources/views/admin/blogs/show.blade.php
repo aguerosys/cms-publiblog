@@ -29,19 +29,34 @@
                 <div><dt class="text-gray-500">Transporte</dt><dd>Carpeta local (desarrollo)</dd></div>
                 <div><dt class="text-gray-500">Carpeta</dt><dd class="break-all font-mono text-xs">{{ $blog->remote_dir }}</dd></div>
             @else
+                <div><dt class="text-gray-500">Protocolo</dt><dd>{{ $blog->protocolLabel() }}</dd></div>
                 <div><dt class="text-gray-500">Servidor</dt><dd>{{ $blog->sftp_host }}:{{ $blog->sftp_port }}</dd></div>
                 <div><dt class="text-gray-500">Usuario</dt><dd>{{ $blog->sftp_user }}</dd></div>
                 <div><dt class="text-gray-500">Autenticación</dt><dd>{{ $blog->sftp_auth === 'key' ? 'Clave SSH' : 'Contraseña' }} <span class="text-gray-400">(guardada, cifrada)</span></dd></div>
                 <div><dt class="text-gray-500">Directorio remoto</dt><dd class="font-mono text-xs">{{ $blog->remote_dir }}</dd></div>
-                <div class="sm:col-span-2"><dt class="text-gray-500">Huella del servidor</dt>
-                    <dd class="break-all font-mono text-xs">{{ $blog->host_key_fingerprint ?? 'Sin confirmar todavía' }}</dd></div>
+                <div class="sm:col-span-2"><dt class="text-gray-500">{{ $blog->isFtps() ? 'Huella del certificado del servidor' : 'Huella del servidor' }}</dt>
+                    <dd class="break-all font-mono text-xs">{{ $blog->host_key_fingerprint ?? 'Sin confirmar todavía' }}</dd>
+                    @if($blog->isFtps() && $blog->host_key_fingerprint)
+                        <dd class="mt-1 text-xs text-gray-500">
+                            {{ $blog->ftps_trust === 'ca'
+                                ? 'Certificado de una autoridad reconocida: se valida en cada conexión y las renovaciones no bloquean el blog.'
+                                : 'Certificado fijado: si el servidor lo cambia (p. ej. al renovarlo), el blog deja de publicar hasta que un administrador lo confirme.' }}
+                        </dd>
+                    @endif</div>
             @endif
         </dl>
 
         @if($pendingFingerprint)
             <div class="mt-6 rounded-md border border-amber-300 bg-amber-50 p-4 text-sm">
-                <p class="font-medium text-amber-900">Huella del servidor</p>
+                <p class="font-medium text-amber-900">{{ $blog->isFtps() ? 'Huella del certificado del servidor' : 'Huella del servidor' }}</p>
                 <p class="mt-1 break-all font-mono text-xs text-amber-900">{{ $pendingFingerprint }}</p>
+                @if($blog->isFtps())
+                    <p class="mt-2 text-amber-800">
+                        {{ $pendingCaValid
+                            ? 'El certificado es válido para este servidor según las autoridades de confianza: se aceptará mientras siga siéndolo, también tras renovarlo.'
+                            : 'El certificado no es de una autoridad reconocida (autofirmado o para otro nombre): se fijará esta huella y, si el servidor la cambia, habrá que confirmarla de nuevo.' }}
+                    </p>
+                @endif
                 <p class="mt-2 text-amber-800">Compárala con la que te dé quien administra el servidor antes de confirmar. Si no coincide, no la aceptes.</p>
                 <form method="POST" action="{{ route('blogs.confirm-fingerprint', $blog) }}" class="mt-3">
                     @csrf
